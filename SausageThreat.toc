@@ -1,8 +1,8 @@
 ## Interface: 30300
-## Title: SausageSalva
+## Title: SausageThreat
 ## Notes: Paladin threat tracker and Hand of Salvation coordinator.
 ## Author: Sausage Party / Kokotiar
 ## Version: 0.9 (Beta)
-## SavedVariables: SausageSalvaDB
+## SavedVariables: SausageThreatDB
 
-SausageSalva.lua
+SausageThreat.lua
