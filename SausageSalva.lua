@@ -13,6 +13,8 @@ local TRICKS_SPELL_ID = 57934 -- Tricks of the Trade
 local SALVA_NAME = GetSpellInfo(SALVA_SPELL_ID)
 local MISDIRECT_NAME = GetSpellInfo(MISDIRECT_SPELL_ID)
 local TRICKS_NAME = GetSpellInfo(TRICKS_SPELL_ID)
+local THREAT_SOUND = "Interface\\AddOns\\SausageSalva\\sound\\threat.wav"
+local mySoundPath
 
 local defaultDB = {
     autoHide = false,
@@ -597,8 +599,8 @@ UpdateCombatGrid = function(dt)
             if isTestMode then threatPct = (i * 7) % 135 elseif unit and UnitExists(unit) then local _, _, pct = UnitDetailedThreatSituation(unit, "target"); threatPct = pct or 0 end
             btn.threatText:SetText(string.format("%d%%", threatPct))
 
-            local threshold = 100
-            if not isTestMode and unit then local _, class = UnitClass(unit); threshold = (class == "MAGE" or class == "WARLOCK" or class == "PRIEST") and 120 or 100 end
+            local threshold = 90
+            if not isTestMode and unit then local _, class = UnitClass(unit); threshold = (class == "MAGE" or class == "WARLOCK" or class == "PRIEST") and 110 or 90 end
             local isTestFocus = isTestMode and (i == 5)
             
             local hasSalva, activeIcon, buffType = false, nil, nil
@@ -662,11 +664,19 @@ UpdateCombatGrid = function(dt)
                     btn.warnLeft:SetAlpha(0.2 + (invPulse * 0.8))
                     btn.warnRight:SetAlpha(0.2 + (invPulse * 0.8))
                     btn.warnLeft:Show(); btn.warnRight:Show()
+                    
+                    -- ZAHRAJ ZVUK (LEN PRE RL), ak prave prekrocil threshold
+                    if IsRaidLeader() and not btn.threatSoundWarned then
+                        PlaySoundFile(THREAT_SOUND, "Master")
+                        btn.threatSoundWarned = true
+                    end
                 elseif threatPct > 0 then 
                     btn.warnLeft:Hide(); btn.warnRight:Hide()
+                    btn.threatSoundWarned = false
                     btn.bg:SetVertexColor(0.2 + ((threatPct / threshold) * 0.6), 0.2, 0.2, 0.9)
                 else 
                     btn.warnLeft:Hide(); btn.warnRight:Hide()
+                    btn.threatSoundWarned = false
                     btn.bg:SetVertexColor(0.2, 0.2, 0.2, 0.9) 
                 end
             end
@@ -949,7 +959,7 @@ SettingsFrame:SetScript("OnShow", function() if SausageSalvaDB then SettingsFram
 
 -- [[ TEST WINDOW ]]
 local TestFrame = CreateFrame("Frame", "SausageSalvaTestFrame", UIParent)
-TestFrame:SetSize(250, 400); TestFrame:SetPoint("CENTER", 300, 0); TestFrame:SetBackdrop(SettingsFrame:GetBackdrop()); TestFrame:SetBackdropColor(0,0,0,1); TestFrame:SetMovable(true); TestFrame:EnableMouse(true); TestFrame:RegisterForDrag("LeftButton"); TestFrame:SetScript("OnDragStart", TestFrame.StartMoving); TestFrame:SetScript("OnDragStop", TestFrame.StopMovingOrSizing); TestFrame:Hide()
+TestFrame:SetSize(250, 450); TestFrame:SetPoint("CENTER", 300, 0); TestFrame:SetBackdrop(SettingsFrame:GetBackdrop()); TestFrame:SetBackdropColor(0,0,0,1); TestFrame:SetMovable(true); TestFrame:EnableMouse(true); TestFrame:RegisterForDrag("LeftButton"); TestFrame:SetScript("OnDragStart", TestFrame.StartMoving); TestFrame:SetScript("OnDragStop", TestFrame.StopMovingOrSizing); TestFrame:Hide()
 local testHeader = TestFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal"); testHeader:SetPoint("TOP", 0, -15); testHeader:SetText("SausageSalva Debug")
 
 local function CreateTestButton(text, y, func)
@@ -984,7 +994,8 @@ CreateTestButton("Simulate HUNT Ping", -215, function() EventFrame:GetScript("On
 CreateTestButton("Simulate ROGUE Ping", -245, function() EventFrame:GetScript("OnEvent")(EventFrame, "CHAT_MSG_ADDON", PREFIX, "PING_CAST:player:"..UnitName("player")..":ROGUE", "RAID", "FakeRL") end)
 CreateTestButton("Add Fake Spellers", -285, function() activePaladins[#activePaladins+1] = { name="F_Holy", spec=1 }; activePaladins[#activePaladins+1] = { name="F_Hunt", spec=4 }; activePaladins[#activePaladins+1] = { name="F_Rogu", spec=5 }; SortPaladins() end)
 CreateTestButton("Fake ANNOUNCE (Pala)", -315, function() EventFrame:GetScript("OnEvent")(EventFrame, "CHAT_MSG_ADDON", PREFIX, "ANNOUNCE:2:1", "RAID", "F_Pala_"..math.random(10,99)) end)
-CreateTestButton("Close Test Window", -350, function() TestFrame:Hide() end)
+CreateTestButton("Test THREAT Sound", -345, function() if THREAT_SOUND then PlaySoundFile(THREAT_SOUND, "Master") end end)
+CreateTestButton("Close Test Window", -390, function() TestFrame:Hide() end)
 
 -- [[ MINIMAP IKONA ]]
 local minimapIcon = CreateFrame("Button", "SausageSalvaMinimapIcon", Minimap)
