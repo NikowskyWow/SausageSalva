@@ -768,7 +768,7 @@ UpdateCombatGrid = function(dt)
                 btn.threatText:SetText(string.format("%d%%", threatPct))
 
                 local role = GetUnitRoleFromName(unitName)
-                if SausageThreatDB.showRoles and unit then
+                if unit or isTestMode then
                     if role == "TANK" then
                         btn.roleIcon:SetTexture("Interface\\LFGFrame\\UI-LFG-ICON-ROLES")
                         btn.roleIcon:SetTexCoord(0, 0.26171875, 0.26171875, 0.5234375)
@@ -1099,7 +1099,7 @@ local cbHideNames = CreateCB("Names", "Hide Names", -120, "hideNames")
 local cbHideThreat = CreateCB("Threat", "Hide Threat %", -150, "hideThreat")
 local cbHideBackground = CreateCB("BG", "Hide Main BG", -180, "hideBackground")
 
-local cbShowRoles = CreateCB("Roles", "Show Grid Roles", -210, "showRoles")
+-- Removed cbShowRoles as per user request
 
 local sldLockout = CreateGridSlider("Lockout", "Cmd Debounce Lockout (s)", 1, 10, col2X, -250, "cmdLockout")
 
@@ -1277,14 +1277,11 @@ function SettingsFrame.RefreshUI()
         cbAutoHide:SetChecked(SausageThreatDB.autoHide)
         sldCols:SetValue(SausageThreatDB.cols); sldWidth:SetValue(SausageThreatDB.btnWidth); sldHeight:SetValue(SausageThreatDB.btnHeight); sldSpacing:SetValue(SausageThreatDB.spacing)
         sldLockout:SetValue(SausageThreatDB.cmdLockout or 3)
-        cbShowRoles:SetChecked(SausageThreatDB.showRoles)
         cbHideBorder:SetChecked(SausageThreatDB.hideBorder); cbHideHeader:SetChecked(SausageThreatDB.hideHeader); cbHideNames:SetChecked(SausageThreatDB.hideNames); cbHideThreat:SetChecked(SausageThreatDB.hideThreat); cbHideBackground:SetChecked(SausageThreatDB.hideBackground)
         cbEnableSound:SetChecked(SausageThreatDB.enableSound)
         SausageThreatSettings_cbBossOnlyAlert_Update()
     else
         generalPanel:Hide(); listPanel:Show(); UpdateIgnoreScrollFrame()
-        cbShowRoles:SetChecked(SausageThreatDB.showRoles)
-        if currentTab == 5 then cbShowRoles:Show() else cbShowRoles:Hide() end
     end
 end
 SettingsFrame:SetScript("OnShow", function() if SausageThreatDB then UpdateSettingsTabsVisibility(); SettingsFrame.RefreshUI() end end)
