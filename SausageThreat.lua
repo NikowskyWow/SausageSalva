@@ -1,11 +1,11 @@
 -- ============================================================================
--- SAUSAGE SALVA - Paladin Threat & Salvation Coordinator (Pro Grid Edition)
+-- SAUSAGE THREAT - Paladin Threat & Coordination (Pro Grid Edition)
 -- Author: Sausage Party / Kokotiar
 -- ============================================================================
 
 local addonName, addonTable = ...
 local SAUSAGE_VERSION = "Beta 0.9" -- SEM SCRIPT DOPLNI VERZIU PODLA TAGU
-local PREFIX = "SSALVA"
+local PREFIX = "STHREAT"
 local SALVA_SPELL_ID = 1038 -- Hand of Salvation
 local MISDIRECT_SPELL_ID = 34477 -- Misdirection
 local TRICKS_SPELL_ID = 57934 -- Tricks of the Trade
@@ -35,7 +35,11 @@ local defaultDB = {
     showListRogue = {},
     showListMaster = {},
     enableSound = true,
-    hideBackground = false
+    bossOnlyAlert = false,
+    hideBackground = false,
+    showRoles = true,
+    cmdLockout = 3,
+    radialRingType = 1
 }
 
 local inCombat = false
@@ -50,6 +54,7 @@ local preCastTarget = nil
 local preCastTimer = 0
 local rangeFailTracker = {}
 local activeBuffsOnTarget = {} -- Tracker pre MD a ToT (meno -> cas vyprsania)
+local lockedSpells = {} -- Cooldown na povely pre hraca
 
 -- [[ PRED-DEKLARÁCIE ]]
 local EventFrame = CreateFrame("Frame")
@@ -138,6 +143,16 @@ local function GetPaladinSpec()
     return spec
 end
 
+local function IsEligibleForThreatSound()
+    if debugLeader or IsRaidLeader() or IsRaidOfficer() then return true end
+    if GetPartyAssignment("MAINTANK", "player") then return true end
+    if isPaladin and GetPaladinSpec() == 2 then return true end
+    -- Ostatní tankovia podľa 'MAINTANK' role alebo manuálneho nastavenia. 
+    return false
+end
+
+local globalThreatSoundTime = 0
+
 local function SendComm(msg)
     if not IsInGroup() then return end
     local channel = IsInRaid() and "RAID" or "PARTY"
@@ -159,6 +174,44 @@ local function GetUnitByName(name)
         end
     end
     return nil
+end
+
+local function DetermineMyRole()
+    local _, class = UnitClass("player")
+    local highestPoints, spec = -1, 1
+    for i = 1, 3 do
+        local _, _, points = GetTalentTabInfo(i)
+        if points and points > highestPoints then
+            highestPoints, spec = points, i
+        end
+    end
+    
+    local role = "DPS"
+    if class == "PALADIN" then
+        if spec == 1 then role = "HEALER" elseif spec == 2 then role = "TANK" end
+    elseif class == "WARRIOR" then
+        if spec == 3 then role = "TANK" end
+    elseif class == "PRIEST" then
+        if spec == 1 or spec == 2 then role = "HEALER" end
+    elseif class == "SHAMAN" then
+        if spec == 3 then role = "HEALER" end
+    elseif class == "DRUID" then
+        if spec == 3 then role = "HEALER" elseif spec == 2 then role = "TANK" end
+    elseif class == "DEATHKNIGHT" then
+        if spec == 1 then role = "TANK" end
+    end
+    return role
+end
+
+local function GetUnitRoleFromName(name)
+    if not name then return "DPS" end
+    if SausageThreatDB.assignedRoles and SausageThreatDB.assignedRoles[name] then
+        return SausageThreatDB.assignedRoles[name]
+    end
+    local unit = GetUnitByName(name)
+    if not unit then return "DPS" end
+    if GetPartyAssignment("MAINTANK", unit) then return "TANK" end
+    return "DPS"
 end
 
 -- [[ LOGIKA ZÁZNAMOV A COOLDOWNOV ]]
@@ -266,16 +319,23 @@ header:SetPoint("TOP", 0, 12)
 
 local title = MainFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
 title:SetPoint("TOP", header, "TOP", 0, -14)
-title:SetText("Sausage Salva")
+title:SetText("Sausage Threat")
 
 local ContentFrame = CreateFrame("Frame", "SausageThreatContent", MainFrame)
 ContentFrame:SetPoint("TOPLEFT", 15, -35)
 ContentFrame:SetSize(1, 1)
 
 -- [[ PANEL PRE KOORDINÁTOROV ]]
-local CoordFrame = CreateFrame("Frame", nil, MainFrame)
-CoordFrame:SetSize(250, 20)
-CoordFrame:SetPoint("TOP", header, "BOTTOM", 0, -2)
+local CoordFrame = CreateFrame("Frame", "SausageThreatCoordFrame", UIParent)
+CoordFrame:SetSize(320, 30)
+CoordFrame:SetPoint("TOP", 0, -50)
+CoordFrame:SetMovable(true)
+CoordFrame:EnableMouse(true)
+CoordFrame:RegisterForDrag("LeftButton")
+CoordFrame:SetScript("OnDragStart", CoordFrame.StartMoving)
+CoordFrame:SetScript("OnDragStop", function(self) self:StopMovingOrSizing() end)
+CoordFrame:SetBackdrop({ bgFile="Interface\\ChatFrame\\ChatFrameBackground", edgeFile="Interface\\Tooltips\\UI-Tooltip-Border", tile=true, tileSize=16, edgeSize=12, insets={left=3,right=3,top=3,bottom=3} })
+CoordFrame:SetBackdropColor(0,0,0,0.9)
 CoordFrame:Hide()
 
 local function CreateCoordIcon(class, x, name)
@@ -290,25 +350,23 @@ local function CreateCoordIcon(class, x, name)
     return f
 end
 
-CreateCoordIcon("Paladin", 0, "SausageThreatCoordPala")
-CreateCoordIcon("Hunter", 85, "SausageThreatCoordHunt")
-CreateCoordIcon("Rogue", 170, "SausageThreatCoordRogue")
+CreateCoordIcon("Paladin", 10, "SausageThreatCoordPala")
+CreateCoordIcon("Hunter", 110, "SausageThreatCoordHunt")
+CreateCoordIcon("Rogue", 210, "SausageThreatCoordRogue")
 
 -- [[ NOVÉ RADIAL MENU (Zmenšené na 128x128, Custom IKONY a VÝSEKY, BEZ ZLATÉHO KRÚŽKU) ]]
 local RadialMenu = CreateFrame("Frame", "SausageThreatRadialMenu", UIParent)
-RadialMenu:SetSize(128, 128)
+RadialMenu:SetSize(175, 175)
 RadialMenu:SetFrameStrata("TOOLTIP")
 RadialMenu:Hide()
 
-local radialBg = RadialMenu:CreateTexture(nil, "BACKGROUND")
-radialBg:SetSize(128, 128)
-radialBg:SetPoint("CENTER", 0, 0)
-radialBg:SetTexture("Interface\\MINIMAP\\UI-Minimap-Background")
-radialBg:SetVertexColor(0, 0, 0, 0.6)
+RadialMenu.customRing = RadialMenu:CreateTexture(nil, "OVERLAY", nil, 7)
+RadialMenu.customRing:SetAllPoints(RadialMenu)
+-- Zmena textúry prebehne v ADDON_LOADED alebo defaultne na paladina
 
 local function CreateSlice(textureName, r, g, b)
     local t = RadialMenu:CreateTexture(nil, "ARTWORK")
-    t:SetSize(128, 128)
+    t:SetSize(130, 130)
     t:SetPoint("CENTER", 0, 0)
     t:SetTexture("Interface\\AddOns\\SausageThreat\\Textures\\" .. textureName)
     t:SetVertexColor(r, g, b, 0.4)
@@ -318,51 +376,74 @@ end
 local palaSec  = CreateSlice("SliceTop.tga", 0.96, 0.55, 0.73)
 local huntSec  = CreateSlice("SliceBotLeft.tga", 0.67, 0.83, 0.45)
 local rogueSec = CreateSlice("SliceBotRight.tga", 1.00, 0.96, 0.41)
+palaSec:SetAlpha(0.7)
+huntSec:SetAlpha(0.7)
+rogueSec:SetAlpha(0.7)
 
 local hub = CreateFrame("Frame", nil, RadialMenu)
-hub:SetSize(26, 26)
+hub:SetSize(34, 34)
 hub:SetPoint("CENTER", 0, 0)
 
-RadialMenu.hubBg = hub:CreateTexture(nil, "OVERLAY")
+RadialMenu.hubBg = hub:CreateTexture(nil, "OVERLAY", nil, 1)
 RadialMenu.hubBg:SetAllPoints()
 RadialMenu.hubBg:SetTexture("Interface\\MINIMAP\\UI-Minimap-Background")
-RadialMenu.hubBg:SetVertexColor(0, 0, 0, 1)
+RadialMenu.hubBg:SetVertexColor(0, 0, 0, 0.9)
 
 local hubBorder = hub:CreateTexture(nil, "OVERLAY", nil, 2)
-hubBorder:SetAllPoints()
-hubBorder:SetTexture("Interface\\CHARACTERFRAME\\UI-Char-InnerShadow")
-hubBorder:SetVertexColor(0, 0, 0, 1)
+hubBorder:SetSize(40, 40)
+hubBorder:SetPoint("CENTER", 0, 0)
+hubBorder:SetTexture("Interface\\COMMON\\GreyCircle")
+hubBorder:SetVertexColor(0.5, 0.5, 0.5, 0.8)
 
 local hubText = hub:CreateFontString(nil, "OVERLAY", "SystemFont_Tiny")
 hubText:SetPoint("CENTER", 0, 1)
 
 local function CreateCustomIcon(textureName, x, y)
     local f = CreateFrame("Frame", nil, RadialMenu)
-    f:SetSize(24, 24)
+    f:SetSize(32, 32)
     f:SetPoint("CENTER", x, y)
     local tex = f:CreateTexture(nil, "OVERLAY")
     tex:SetAllPoints()
     tex:SetTexture("Interface\\AddOns\\SausageThreat\\Textures\\" .. textureName)
+    f.tex = tex
     return f
 end
 
-local iconPala = CreateCustomIcon("IconSalva.tga", 0, 32)
-local iconHunt = CreateCustomIcon("IconMisdirect.tga", -28, -16)
-local iconRogue = CreateCustomIcon("IconTricks.tga", 28, -16)
+local iconPala = CreateCustomIcon("IconSalva.tga", 0, 36)
+local iconHunt = CreateCustomIcon("IconMisdirect.tga", -31, -18)
+local iconRogue = CreateCustomIcon("IconTricks.tga", 31, -18)
 
--- Metallic Aura Ring (Čistý kovový vzhľad socketu)
+-- Metallic Ring (Clean border)
 local aura = RadialMenu:CreateTexture(nil, "OVERLAY", nil, 5)
-aura:SetSize(140, 140)
+aura:SetSize(175, 175)
 aura:SetPoint("CENTER", 0, 0)
-aura:SetTexture("Interface\\ItemSocketingFrame\\UI-EmptySocket-Meta")
-aura:SetVertexColor(1, 1, 1, 0.6)
+aura:SetTexture("Interface\\COMMON\\GreyCircle")
+aura:SetVertexColor(1, 1, 1, 0.8)
 
 RadialMenu.targetName = nil
 RadialMenu.currentHoveredClass = nil
+RadialMenu.cancelled = false
+
+local function CanAssignBuffToTarget(buffCode, targetName, targetRole)
+    if lockedSpells[targetName] and lockedSpells[targetName][buffCode] and lockedSpells[targetName][buffCode] > GetTime() then return false, "COOLDOWN" end
+    if activeBuffsOnTarget[targetName] and activeBuffsOnTarget[targetName][buffCode] and activeBuffsOnTarget[targetName][buffCode].expiry > GetTime() then return false, "ACTIVE" end
+    
+    if buffCode == "PALA" and targetRole == "TANK" then return false, "Salva on Tank" end
+    if buffCode == "HUNT" and targetRole ~= "TANK" then return false, "MD non-Tank" end
+    if buffCode == "ROGUE" and targetRole == "HEALER" then return false, "ToT on Healer" end
+    return true
+end
 
 HandleRadialClick = function(targetClass, overrideTargetName)
     local targetName = overrideTargetName or RadialMenu.targetName
     if not targetName then return end
+    
+    local targetRole = GetUnitRoleFromName(targetName)
+    local canAssign, reason = CanAssignBuffToTarget(targetClass, targetName, targetRole)
+    if not canAssign then
+        if reason ~= "COOLDOWN" and reason ~= "ACTIVE" then print("|cFFFF0000[SausageThreat]|r Úloha " .. targetClass .. " blokovaná na role: " .. targetRole .. " (" .. targetName .. ")!") end
+        return
+    end
     
     local potentialUnits = {}
     local now = GetTime()
@@ -380,6 +461,10 @@ HandleRadialClick = function(targetClass, overrideTargetName)
 
     if #potentialUnits > 0 then
         local chosenUnit = potentialUnits[1]
+        
+        lockedSpells[targetName] = lockedSpells[targetName] or {}
+        lockedSpells[targetName][targetClass] = GetTime() + (SausageThreatDB.cmdLockout or 3)
+        
         SendComm("PING_CAST:"..targetName..":"..chosenUnit..":"..targetClass)
         print("|cFF00CCFF[SausageThreat]|r Assigning " .. targetClass .. " to " .. chosenUnit)
     else
@@ -390,8 +475,21 @@ end
 
 RadialMenu:SetScript("OnUpdate", function(self)
     if not self:IsShown() then return end
-    if not IsMouseButtonDown("RightButton") then self:Hide(); return end
     
+    if IsMouseButtonDown("LeftButton") then
+        self.cancelled = true
+        self:Hide()
+        return
+    end
+    
+    if not IsMouseButtonDown("RightButton") then
+        if self.currentHoveredClass and not self.cancelled then
+            HandleRadialClick(self.currentHoveredClass)
+        end
+        self:Hide()
+        return
+    end
+
     local x, y = GetCursorPosition()
     local s = self:GetEffectiveScale()
     local mx, my = self:GetCenter()
@@ -399,19 +497,27 @@ RadialMenu:SetScript("OnUpdate", function(self)
     local angle = math.deg(math.atan2(y/s - my, x/s - mx))
     local dist = math.sqrt((x/s - mx)^2 + (y/s - my)^2)
 
-    palaSec:SetAlpha(0.4); huntSec:SetAlpha(0.4); rogueSec:SetAlpha(0.4)
+    local tRole = GetUnitRoleFromName(RadialMenu.targetName)
+    local pOK = CanAssignBuffToTarget("PALA", RadialMenu.targetName, tRole)
+    local hOK = CanAssignBuffToTarget("HUNT", RadialMenu.targetName, tRole)
+    local rOK = CanAssignBuffToTarget("ROGUE", RadialMenu.targetName, tRole)
+
+    if pOK then palaSec:SetVertexColor(0.96, 0.55, 0.73, 0.4); palaSec:SetAlpha(0.6); iconPala.tex:SetVertexColor(1, 1, 1) else palaSec:SetVertexColor(0.2, 0.2, 0.2, 0.4); palaSec:SetAlpha(0.4); iconPala.tex:SetVertexColor(0.2, 0.2, 0.2) end
+    if hOK then huntSec:SetVertexColor(0.67, 0.83, 0.45, 0.4); huntSec:SetAlpha(0.6); iconHunt.tex:SetVertexColor(1, 1, 1) else huntSec:SetVertexColor(0.2, 0.2, 0.2, 0.4); huntSec:SetAlpha(0.4); iconHunt.tex:SetVertexColor(0.2, 0.2, 0.2) end
+    if rOK then rogueSec:SetVertexColor(1.00, 0.96, 0.41, 0.4); rogueSec:SetAlpha(0.6); iconRogue.tex:SetVertexColor(1, 1, 1) else rogueSec:SetVertexColor(0.2, 0.2, 0.2, 0.4); rogueSec:SetAlpha(0.4); iconRogue.tex:SetVertexColor(0.2, 0.2, 0.2) end
+
     self.currentHoveredClass = nil
-
+    
     if dist < 12 then return end
-
     if angle >= 30 and angle <= 150 then
-        self.currentHoveredClass = "PALA"; palaSec:SetAlpha(1.0)
+        if pOK then self.currentHoveredClass = "PALA"; palaSec:SetAlpha(1.0) end
     elseif angle > 150 or angle <= -90 then
-        self.currentHoveredClass = "HUNT"; huntSec:SetAlpha(1.0)
+        if hOK then self.currentHoveredClass = "HUNT"; huntSec:SetAlpha(1.0) end
     else
-        self.currentHoveredClass = "ROGUE"; rogueSec:SetAlpha(1.0)
+        if rOK then self.currentHoveredClass = "ROGUE"; rogueSec:SetAlpha(1.0) end
     end
 end)
+
 
 -- [[ GRID SYSTÉM A AUTO-VEĽKOSŤ ]]
 SausageThreatMainFrame_UpdateGrid = function()
@@ -464,7 +570,7 @@ SausageThreatMainFrame_UpdateGrid = function()
             btn.unitName = unitName
             btn:SetSize(boxWidth, boxHeight)
             btn:SetFrameLevel(MainFrame:GetFrameLevel() + 5)
-            btn.text:SetText(string.sub(unitName, 1, 6))
+            btn.text:SetText(string.sub(unitName, 1, 9))
             if SausageThreatDB.hideNames then btn.text:Hide() else btn.text:Show() end
             btn.threatText:SetText("0%")
             if SausageThreatDB.hideThreat then btn.threatText:Hide() else btn.threatText:Show() end
@@ -565,18 +671,41 @@ local function CreateGridButtons()
         btn.warnRight:SetText("!!")
         btn.warnRight:SetTextColor(1, 0, 0)
         btn.warnRight:Hide()
+        
+        btn.roleIcon = btn:CreateTexture(nil, "OVERLAY", nil, 6)
+        btn.roleIcon:SetSize(14, 14)
+        btn.roleIcon:SetPoint("TOPLEFT", 1, -1)
+        btn.roleIcon:Hide()
 
         btn:SetAttribute("type1", "spell"); btn:SetAttribute("spell1", mySpellName or "")
         btn:RegisterForClicks("LeftButtonUp", "RightButtonUp")
         
         btn:SetScript("OnMouseDown", function(self, button)
+            if button == "LeftButton" and IsShiftKeyDown() then
+                if IsRaidLeader() or IsRaidOfficer() then
+                    local uName = self.unitName or btn.text:GetText()
+                    if uName then
+                        local curRole = GetUnitRoleFromName(uName)
+                        local newRole = (curRole == "DPS" and "TANK") or (curRole == "TANK" and "HEALER") or "DPS"
+                        SausageThreatDB.assignedRoles = SausageThreatDB.assignedRoles or {}
+                        SausageThreatDB.assignedRoles[uName] = newRole
+                        SendComm("SET_ROLE:"..uName..":"..newRole)
+                        if not InCombatLockdown() then SausageThreatMainFrame_UpdateGrid() end
+                        print("|cFF00CCFF[SausageThreat]|r Role pre " .. uName .. " zmenená na " .. newRole)
+                    end
+                end
+                return
+            end
+
             if button == "RightButton" then
                 if IsRaidLeader() or IsRaidOfficer() or not IsInRaid() then
                     local targetName = UnitName(self.targetUnit)
                     local _, targetClass = UnitClass(self.targetUnit)
                     if targetName then
                         RadialMenu.targetName = targetName
-                        RadialMenu.hubBg:SetVertexColor(targetClass and RAID_CLASS_COLORS[targetClass] and RAID_CLASS_COLORS[targetClass].r or 0.5, targetClass and RAID_CLASS_COLORS[targetClass] and RAID_CLASS_COLORS[targetClass].g or 0.5, targetClass and RAID_CLASS_COLORS[targetClass] and RAID_CLASS_COLORS[targetClass].b or 0.5, 1)
+                        RadialMenu.currentHoveredClass = nil
+                        RadialMenu.cancelled = false
+                        RadialMenu.hubBg:SetVertexColor(targetClass and RAID_CLASS_COLORS[targetClass] and RAID_CLASS_COLORS[targetClass].r or 0.5, targetClass and RAID_CLASS_COLORS[targetClass] and RAID_CLASS_COLORS[targetClass].g or 0.5, targetClass and RAID_CLASS_COLORS[targetClass] and RAID_CLASS_COLORS[targetClass].b or 0.5, 0.9)
                         local x, y = GetCursorPosition(); local scale = UIParent:GetEffectiveScale()
                         RadialMenu:ClearAllPoints(); RadialMenu:SetPoint("CENTER", UIParent, "BOTTOMLEFT", x/scale, y/scale); RadialMenu:Show()
                     end
@@ -585,10 +714,7 @@ local function CreateGridButtons()
         end)
 
         btn:SetScript("OnMouseUp", function(self, button)
-            if button == "RightButton" and RadialMenu:IsShown() then
-                if RadialMenu.currentHoveredClass then HandleRadialClick(RadialMenu.currentHoveredClass) end
-                RadialMenu:Hide()
-            end
+            -- Handled directly by RadialMenu now
         end)
 
         btn:HookScript("OnClick", function(self, button)
@@ -617,19 +743,42 @@ UpdateCombatGrid = function(dt)
             
             if isOffline then
                 btn:SetAlpha(0.2)
-                btn.bg:SetVertexColor(0.05, 0.05, 0.05, 0.9)
+                btn.bg:SetVertexColor(0.2, 0.2, 0.2, 0.9)
+                btn.text:SetTextColor(0.5, 0.5, 0.5, 1)
+                btn.threatText:SetTextColor(0.5, 0.5, 0.5, 1)
                 btn.threatText:SetText("|cFF888888OFF|r")
                 btn.warnLeft:Hide(); btn.warnRight:Hide()
                 btn.pingHighlight:Hide(); btn.pingIcon:Hide(); btn.icon:Hide()
             else
                 if not isTestMode and unit and UnitExists(unit) then
                     if mySpellName then inRange = IsSpellInRange(mySpellName, unit) else inRange = UnitInRange(unit) and 1 or 0 end
+                    local _, clas = UnitClass(unit)
+                    if clas and RAID_CLASS_COLORS[clas] then
+                        btn.text:SetTextColor(RAID_CLASS_COLORS[clas].r, RAID_CLASS_COLORS[clas].g, RAID_CLASS_COLORS[clas].b, 1)
+                        btn.threatText:SetTextColor(RAID_CLASS_COLORS[clas].r, RAID_CLASS_COLORS[clas].g, RAID_CLASS_COLORS[clas].b, 1)
+                    end
+                else
+                    btn.text:SetTextColor(0, 0, 0, 1); btn.threatText:SetTextColor(0, 0, 0, 1)
                 end
+                
                 if inRange == 0 then btn:SetAlpha(0.4) else btn:SetAlpha(1.0) end
 
                 local threatPct = 0
                 if isTestMode then threatPct = (i * 7) % 135 elseif unit and UnitExists(unit) then local _, _, pct = UnitDetailedThreatSituation(unit, "target"); threatPct = pct or 0 end
                 btn.threatText:SetText(string.format("%d%%", threatPct))
+
+                local role = GetUnitRoleFromName(unitName)
+                if SausageThreatDB.showRoles and unit then
+                    if role == "TANK" then
+                        btn.roleIcon:SetTexture("Interface\\LFGFrame\\UI-LFG-ICON-ROLES")
+                        btn.roleIcon:SetTexCoord(0, 0.26171875, 0.26171875, 0.5234375)
+                        btn.roleIcon:Show()
+                    elseif role == "HEALER" then
+                        btn.roleIcon:SetTexture("Interface\\LFGFrame\\UI-LFG-ICON-ROLES")
+                        btn.roleIcon:SetTexCoord(0.26171875, 0.5234375, 0.0, 0.26171875)
+                        btn.roleIcon:Show()
+                    else btn.roleIcon:Hide() end
+                else btn.roleIcon:Hide() end
 
                 local threshold = 90
             if not isTestMode and unit then local _, class = UnitClass(unit); threshold = (class == "MAGE" or class == "WARLOCK" or class == "PRIEST") and 110 or 90 end
@@ -653,7 +802,13 @@ UpdateCombatGrid = function(dt)
             if isTestMode and (i == 3 or i == 7) then 
                 hasSalva = true; activeIcon = "Interface\\Icons\\Spell_Holy_SealOfSalvation"; buffType = "PALA"
             elseif unit and UnitExists(unit) and not hasSalva then -- Ak sme este nenasli cez tracker, checkneme UnitBuff
-                local s, _, iconS = UnitBuff(unit, SALVA_NAME); local m, _, iconM = UnitBuff(unit, MISDIRECT_NAME); local t, _, iconT = UnitBuff(unit, TRICKS_NAME)
+                local s, _, iconS = UnitBuff(unit, SALVA_NAME)
+                local m, _, iconM, _, _, _, _, uCasterM = UnitBuff(unit, MISDIRECT_NAME)
+                local t, _, iconT, _, _, _, _, uCasterT = UnitBuff(unit, TRICKS_NAME)
+                
+                if m and uCasterM and UnitIsUnit(uCasterM, unit) then m = nil end
+                if t and uCasterT and UnitIsUnit(uCasterT, unit) then t = nil end
+                
                 if s then hasSalva = true; activeIcon = iconS; buffType = "PALA" 
                 elseif m then hasSalva = true; activeIcon = iconM; buffType = "HUNT" 
                 elseif t then hasSalva = true; activeIcon = iconT; buffType = "ROGUE" end
@@ -705,25 +860,35 @@ UpdateCombatGrid = function(dt)
                     btn.pingHighlight:Show()
                 elseif threatPct >= threshold then 
                     -- VYSOKÝ THREAT: Panic indikátor !!
-                    btn.bg:SetVertexColor(0.6 + (pulse * 0.4), 0, 0, 0.9)
+                    btn.bg:SetVertexColor(1, 0, 0, 0.9)
+                    btn.text:SetTextColor(1, 1, 1, 1)
+                    btn.threatText:SetTextColor(1, 1, 1, 1)
                     local invPulse = 1 - pulse
                     btn.warnLeft:SetAlpha(0.2 + (invPulse * 0.8))
                     btn.warnRight:SetAlpha(0.2 + (invPulse * 0.8))
                     btn.warnLeft:Show(); btn.warnRight:Show()
                     
-                    -- ZAHRAJ ZVUK (LEN PRE RL), ak prave prekrocil threshold
-                    if IsRaidLeader() and not btn.threatSoundWarned and SausageThreatDB.enableSound then
-                        PlaySoundFile(THREAT_SOUND, "Master")
+                    -- ZAHRAJ ZVUK (LEN PRE RL / TANKOV), ak prave prekrocil threshold
+                    if IsEligibleForThreatSound() and not btn.threatSoundWarned and SausageThreatDB.enableSound then
+                        local now = GetTime()
+                        if now - globalThreatSoundTime > 3 then
+                            local isBoss = (UnitLevel("target") == -1) or (UnitClassification("target") == "worldboss")
+                            if not SausageThreatDB.bossOnlyAlert or isBoss then
+                                PlaySoundFile(THREAT_SOUND, "Master")
+                                globalThreatSoundTime = now
+                            end
+                        end
                         btn.threatSoundWarned = true
                     end
                 elseif threatPct > 0 then 
                     btn.warnLeft:Hide(); btn.warnRight:Hide()
                     btn.threatSoundWarned = false
-                    btn.bg:SetVertexColor(0.2 + ((threatPct / threshold) * 0.6), 0.2, 0.2, 0.9)
+                    local fade = 1 - (threatPct / threshold)
+                    btn.bg:SetVertexColor(1, fade, fade, 0.9)
                 else 
                     btn.warnLeft:Hide(); btn.warnRight:Hide()
                     btn.threatSoundWarned = false
-                    btn.bg:SetVertexColor(0.2, 0.2, 0.2, 0.9) 
+                    btn.bg:SetVertexColor(1, 1, 1, 0.9) 
                 end
             end
         end
@@ -732,7 +897,7 @@ end
 end
 
 -- [[ UPDATE / GITHUB CUSTOM FRAME ]]
-local GitFrame = CreateFrame("Frame", "SausageAutomsgGitFrame", UIParent)
+local GitFrame = CreateFrame("Frame", "SausageThreatGitFrame", UIParent)
 GitFrame:SetSize(320, 130)
 GitFrame:SetPoint("CENTER")
 GitFrame:SetFrameStrata("DIALOG")
@@ -742,7 +907,7 @@ GitFrame:SetBackdrop({
     tile = true, tileSize = 32, edgeSize = 32,
     insets = { left = 11, right = 12, top = 12, bottom = 11 }
 })
-tinsert(UISpecialFrames, "SausageAutomsgGitFrame")
+tinsert(UISpecialFrames, "SausageThreatGitFrame")
 GitFrame:Hide()
 
 local gitHeader = GitFrame:CreateTexture(nil, "OVERLAY")
@@ -771,7 +936,7 @@ GitFrame:SetScript("OnShow", function() gitEditBox:SetText(GITHUB_LINK); gitEdit
 
 -- [[ NASTAVENIA (SETTINGS FRAME) ]]
 local SettingsFrame = CreateFrame("Frame", "SausageThreatSettings", UIParent)
-SettingsFrame:SetSize(450, 520)
+SettingsFrame:SetSize(480, 580)
 SettingsFrame:SetPoint("CENTER")
 SettingsFrame:SetFrameStrata("DIALOG")
 SettingsFrame:SetMovable(true)
@@ -780,12 +945,12 @@ SettingsFrame:RegisterForDrag("LeftButton")
 SettingsFrame:SetScript("OnDragStart", SettingsFrame.StartMoving)
 SettingsFrame:SetScript("OnDragStop", SettingsFrame.StopMovingOrSizing)
 SettingsFrame:SetBackdrop({
-    bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
+    bgFile = "Interface\\ChatFrame\\ChatFrameBackground",
     edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
     tile = true, tileSize = 16, edgeSize = 12,
     insets = { left = 3, right = 3, top = 3, bottom = 3 }
 })
-SettingsFrame:SetBackdropColor(0, 0, 0, 1.0)
+SettingsFrame:SetBackdropColor(0, 0, 0, 0.9)
 tinsert(UISpecialFrames, "SausageThreatSettings")
 SettingsFrame:Hide()
 
@@ -821,7 +986,68 @@ local function CreateTab(id, text, x, width)
     return btn
 end
 
-CreateTab(1, "General", 20, 80); CreateTab(2, "Paladins", 105, 80); CreateTab(3, "Hunters", 190, 80); CreateTab(4, "Rogues", 275, 80); CreateTab(5, "Master", 360, 80)
+CreateTab(1, "General", 20, 80); CreateTab(2, "Paladins", 105, 80); CreateTab(3, "Hunters", 190, 80); CreateTab(4, "Rogues", 275, 80); CreateTab(5, "RL/RA View", 360, 85)
+
+local ignoreLabel = listPanel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+ignoreLabel:SetPoint("TOPLEFT", 15, -5); ignoreLabel:SetText("Players Visibility (Show List)")
+
+local SausageThreatSettings_ReadOnlyLabel = listPanel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+SausageThreatSettings_ReadOnlyLabel:SetPoint("TOP", listPanel, "TOP", 0, -5)
+SausageThreatSettings_ReadOnlyLabel:SetText("|cFFFF0000Nastavenia riadené Masterom / Raid Leadrom|r")
+SausageThreatSettings_ReadOnlyLabel:Hide()
+
+local btnShowAll = CreateFrame("Button", nil, listPanel, "UIPanelButtonTemplate")
+local btnHideAll = CreateFrame("Button", nil, listPanel, "UIPanelButtonTemplate")
+
+local function UpdateSettingsTabsVisibility()
+    local isSpecial = IsRaidLeader() or IsRaidOfficer()
+    local inRaid = IsInRaid()
+    local tabs = { SausageThreatTab1, SausageThreatTab2, SausageThreatTab3, SausageThreatTab4, SausageThreatTab5 }
+    local showTab = {true, false, false, false, false}
+    
+    if isSpecial then
+        showTab[2], showTab[3], showTab[4], showTab[5] = true, true, true, true
+        tabs[2]:SetText("Paladins"); tabs[3]:SetText("Hunters")
+        tabs[4]:SetText("Rogues"); tabs[5]:SetText("RL/RA View")
+    else
+        if isPaladin then showTab[2] = true; tabs[2]:SetText("Grid View") end
+        if isHunter then showTab[3] = true; tabs[3]:SetText("Grid View") end
+        if isRogue then showTab[4] = true; tabs[4]:SetText("Grid View") end
+        if not (isPaladin or isHunter or isRogue) then
+            showTab[5] = true; tabs[5]:SetText("Grid View")
+        end
+    end
+    
+    local xOffset = 20
+    for i = 1, 5 do
+        if showTab[i] then
+            tabs[i]:SetPoint("TOPLEFT", xOffset, -35)
+            tabs[i]:Show()
+            xOffset = xOffset + 85
+        else
+            tabs[i]:Hide()
+        end
+    end
+    
+    if not showTab[currentTab] then
+        currentTab = 1
+        for i=1, 5 do 
+            if tabs[i] then if i == currentTab then tabs[i]:SetAlpha(1.0) else tabs[i]:SetAlpha(0.6) end end
+        end
+    end
+
+    if inRaid and not isSpecial then
+        SausageThreatSettings_ReadOnlyLabel:Show()
+        ignoreLabel:Hide()
+        btnShowAll:Disable()
+        btnHideAll:Disable()
+    else
+        SausageThreatSettings_ReadOnlyLabel:Hide()
+        ignoreLabel:Show()
+        btnShowAll:Enable()
+        btnHideAll:Enable()
+    end
+end
 
 local cbAutoHide = CreateFrame("CheckButton", nil, generalPanel, "OptionsBaseCheckButtonTemplate")
 cbAutoHide:SetPoint("TOPLEFT", 20, 0)
@@ -873,8 +1099,12 @@ local cbHideNames = CreateCB("Names", "Hide Names", -120, "hideNames")
 local cbHideThreat = CreateCB("Threat", "Hide Threat %", -150, "hideThreat")
 local cbHideBackground = CreateCB("BG", "Hide Main BG", -180, "hideBackground")
 
+local cbShowRoles = CreateCB("Roles", "Show Grid Roles", -210, "showRoles")
+
+local sldLockout = CreateGridSlider("Lockout", "Cmd Debounce Lockout (s)", 1, 10, col2X, -250, "cmdLockout")
+
 local anchorLabel = generalPanel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-anchorLabel:SetPoint("TOPLEFT", 20, -255); anchorLabel:SetText("Growth Direction (Anchor):")
+anchorLabel:SetPoint("TOPLEFT", 20, -260); anchorLabel:SetText("Growth Direction (Anchor):")
 
 local function CreateAnchorBtn(name, point, x, y)
     local btn = CreateFrame("Button", nil, generalPanel, "UIPanelButtonTemplate")
@@ -890,11 +1120,8 @@ local function CreateAnchorBtn(name, point, x, y)
         if not InCombatLockdown() then SausageThreatMainFrame_UpdateGrid() end
     end)
 end
-CreateAnchorBtn("Down", "TOP", 20, -275); CreateAnchorBtn("Up", "BOTTOM", 85, -275)
-CreateAnchorBtn("Right", "LEFT", 150, -275); CreateAnchorBtn("Left", "RIGHT", 215, -275)
-
-local ignoreLabel = listPanel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-ignoreLabel:SetPoint("TOPLEFT", 15, -5); ignoreLabel:SetText("Players Visibility (Show List)")
+CreateAnchorBtn("Down", "TOP", 20, -280); CreateAnchorBtn("Up", "BOTTOM", 85, -280)
+CreateAnchorBtn("Right", "LEFT", 150, -280); CreateAnchorBtn("Left", "RIGHT", 215, -280)
 
 local rosterCache = {}
 local function MassSyncCheck(state)
@@ -902,10 +1129,8 @@ local function MassSyncCheck(state)
     local classCode = (currentTab == 2 and "PALA") or (currentTab == 3 and "HUNT") or (currentTab == 4 and "ROGUE") or (currentTab == 5 and "MASTER")
     if not listKey then return end
     
-    -- Aktualizácia DB pre všetkých v aktuálnom raide
     for _, name in ipairs(rosterCache) do SausageThreatDB[listKey][name] = state end
     
-    -- Sync a UI refresh
     if IsInGroup() then
         local csv = ""; for name, shown in pairs(SausageThreatDB[listKey]) do if shown then csv = csv .. name .. "," end end
         SendComm("SYNC_LIST:"..classCode..":"..csv)
@@ -913,18 +1138,16 @@ local function MassSyncCheck(state)
     UpdateIgnoreScrollFrame(); if not InCombatLockdown() then SausageThreatMainFrame_UpdateGrid() end
 end
 
-local btnShowAll = CreateFrame("Button", nil, listPanel, "UIPanelButtonTemplate")
 btnShowAll:SetSize(80, 20); btnShowAll:SetPoint("TOPRIGHT", -105, -3); btnShowAll:SetText("Show All")
 btnShowAll:SetScript("OnClick", function() MassSyncCheck(true) end)
 
-local btnHideAll = CreateFrame("Button", nil, listPanel, "UIPanelButtonTemplate")
 btnHideAll:SetSize(80, 20); btnHideAll:SetPoint("TOPRIGHT", -15, -3); btnHideAll:SetText("Hide All")
 btnHideAll:SetScript("OnClick", function() MassSyncCheck(false) end)
 
 local rosterFrame = CreateFrame("Frame", nil, listPanel)
 rosterFrame:SetSize(410, 330); rosterFrame:SetPoint("TOPLEFT", 15, -25)
-rosterFrame:SetBackdrop({ bgFile="Interface\\Tooltips\\UI-Tooltip-Background", edgeFile="Interface\\Tooltips\\UI-Tooltip-Border", tile=true, tileSize=16, edgeSize=12, insets={left=3,right=3,top=3,bottom=3} })
-rosterFrame:SetBackdropColor(0,0,0,0.5)
+rosterFrame:SetBackdrop({ bgFile="Interface\\ChatFrame\\ChatFrameBackground", edgeFile="Interface\\Tooltips\\UI-Tooltip-Border", tile=true, tileSize=16, edgeSize=12, insets={left=3,right=3,top=3,bottom=3} })
+rosterFrame:SetBackdropColor(0,0,0,0.8)
 
 local ignoreListScroll = CreateFrame("ScrollFrame", "SausageThreatIgnoreScroll", rosterFrame, "FauxScrollFrameTemplate")
 ignoreListScroll:SetPoint("TOPLEFT", 5, -5); ignoreListScroll:SetPoint("BOTTOMRIGHT", -25, 5)
@@ -972,13 +1195,14 @@ UpdateIgnoreScrollFrame = function()
             row.playerName = pName; row.text:SetText(pName)
             if SausageThreatDB[listKey] and SausageThreatDB[listKey][pName] then row:SetChecked(true); row.text:SetTextColor(1, 1, 1, 1) else row:SetChecked(false); row.text:SetTextColor(0.5, 0.5, 0.5, 1) end
             row:Show()
+            if IsInRaid() and not (IsRaidLeader() or IsRaidOfficer()) then row:Disable() else row:Enable() end
         else row:Hide() end
     end
 end
 ignoreListScroll:SetScript("OnVerticalScroll", function(self, offset) FauxScrollFrame_OnVerticalScroll(self, offset, 20, UpdateIgnoreScrollFrame) end)
 
 local footerFrame = CreateFrame("Frame", nil, SettingsFrame)
-footerFrame:SetSize(450, 75); footerFrame:SetPoint("BOTTOMLEFT", 0, 0); footerFrame:SetFrameLevel(SettingsFrame:GetFrameLevel() + 5)
+footerFrame:SetSize(480, 75); footerFrame:SetPoint("BOTTOMLEFT", 0, 0); footerFrame:SetFrameLevel(SettingsFrame:GetFrameLevel() + 5)
 
 local btnCheckStatus = CreateFrame("Button", nil, footerFrame, "UIPanelButtonTemplate")
 btnCheckStatus:SetSize(110, 25); btnCheckStatus:SetPoint("BOTTOMLEFT", 15, 45); btnCheckStatus:SetText("Check Group")
@@ -1016,18 +1240,54 @@ local testSoundBtn = CreateFrame("Button", nil, generalPanel, "UIPanelButtonTemp
 testSoundBtn:SetSize(80, 22); testSoundBtn:SetPoint("LEFT", cbEnableSoundText, "RIGHT", 20, 0); testSoundBtn:SetText("Test Sound")
 testSoundBtn:SetScript("OnClick", function() if mySoundPath then PlaySoundFile(mySoundPath, "Master") end end)
 
+local cbBossOnlyAlert = CreateFrame("CheckButton", nil, generalPanel, "OptionsBaseCheckButtonTemplate")
+cbBossOnlyAlert:SetPoint("TOPLEFT", 20, -350)
+cbBossOnlyAlert:SetScript("OnClick", function(self) if SausageThreatDB then SausageThreatDB.bossOnlyAlert = self:GetChecked() end end)
+local cbBossOnlyAlertText = generalPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+cbBossOnlyAlertText:SetPoint("LEFT", cbBossOnlyAlert, "RIGHT", 5, 0); cbBossOnlyAlertText:SetText("Sound alert only on boss")
+
+local radialLabel = generalPanel:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+radialLabel:SetPoint("TOPLEFT", 20, -390); radialLabel:SetText("Radial Theme:")
+
+local ringPaths = { [1] = "rogue", [2] = "paladin", [3] = "hunter" }
+local function GetRingPath(id) return "Interface\\AddOns\\SausageThreat\\Textures\\ring_" .. (ringPaths[id] or "paladin") .. ".tga" end
+
+local function CreateThemeBtn(id, label, xOffset)
+    local btn = CreateFrame("Button", nil, generalPanel, "UIPanelButtonTemplate")
+    btn:SetSize(60, 22); btn:SetPoint("LEFT", radialLabel, "RIGHT", xOffset, 0); btn:SetText(label)
+    btn:SetScript("OnClick", function()
+        if SausageThreatDB then SausageThreatDB.radialRingType = id end
+        if RadialMenu and RadialMenu.customRing then
+            RadialMenu.customRing:SetTexture(GetRingPath(id))
+        end
+    end)
+    return btn
+end
+local themeBtn1 = CreateThemeBtn(1, "Rogue", 10)
+local themeBtn2 = CreateThemeBtn(2, "Paladin", 75)
+local themeBtn3 = CreateThemeBtn(3, "Hunter", 140)
+
+function SausageThreatSettings_cbBossOnlyAlert_Update()
+    if cbBossOnlyAlert and SausageThreatDB then cbBossOnlyAlert:SetChecked(SausageThreatDB.bossOnlyAlert) end
+end
+
 function SettingsFrame.RefreshUI()
     if currentTab == 1 then
         generalPanel:Show(); listPanel:Hide()
         cbAutoHide:SetChecked(SausageThreatDB.autoHide)
         sldCols:SetValue(SausageThreatDB.cols); sldWidth:SetValue(SausageThreatDB.btnWidth); sldHeight:SetValue(SausageThreatDB.btnHeight); sldSpacing:SetValue(SausageThreatDB.spacing)
+        sldLockout:SetValue(SausageThreatDB.cmdLockout or 3)
+        cbShowRoles:SetChecked(SausageThreatDB.showRoles)
         cbHideBorder:SetChecked(SausageThreatDB.hideBorder); cbHideHeader:SetChecked(SausageThreatDB.hideHeader); cbHideNames:SetChecked(SausageThreatDB.hideNames); cbHideThreat:SetChecked(SausageThreatDB.hideThreat); cbHideBackground:SetChecked(SausageThreatDB.hideBackground)
         cbEnableSound:SetChecked(SausageThreatDB.enableSound)
+        SausageThreatSettings_cbBossOnlyAlert_Update()
     else
         generalPanel:Hide(); listPanel:Show(); UpdateIgnoreScrollFrame()
+        cbShowRoles:SetChecked(SausageThreatDB.showRoles)
+        if currentTab == 5 then cbShowRoles:Show() else cbShowRoles:Hide() end
     end
 end
-SettingsFrame:SetScript("OnShow", function() if SausageThreatDB then SettingsFrame.RefreshUI() end end)
+SettingsFrame:SetScript("OnShow", function() if SausageThreatDB then UpdateSettingsTabsVisibility(); SettingsFrame.RefreshUI() end end)
 
 -- [[ TEST WINDOW ]]
 local TestFrame = CreateFrame("Frame", "SausageThreatTestFrame", UIParent)
@@ -1101,9 +1361,20 @@ EventFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
 EventFrame:RegisterEvent("CHAT_MSG_ADDON")
 EventFrame:RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
 EventFrame:RegisterEvent("SPELL_UPDATE_COOLDOWN")
+EventFrame:RegisterEvent("UNIT_AURA")
 
 EventFrame:SetScript("OnEvent", function(self, event, ...)
-    if event == "ADDON_LOADED" then
+    if event == "UNIT_AURA" then
+        local unit = ...
+        if unit == "player" and totTargetIsDPS then
+            local name, _, _, _, _, duration = UnitBuff("player", TRICKS_NAME)
+            if name and duration and duration <= 6 then
+                CancelUnitBuff("player", TRICKS_NAME)
+                totTargetIsDPS = false
+                print("|cFF00CCFF[SausageThreat]|r Auto-canceled ToT Threat Transfer on DPS target!")
+            end
+        end
+    elseif event == "ADDON_LOADED" then
         local name = ...
         if name == addonName then
             if RegisterAddonMessagePrefix then RegisterAddonMessagePrefix(PREFIX) end
@@ -1111,17 +1382,45 @@ EventFrame:SetScript("OnEvent", function(self, event, ...)
             for k, v in pairs(defaultDB) do if SausageThreatDB[k] == nil then SausageThreatDB[k] = v end end
             if SausageThreatDB.framePoint then SausageThreatDB.anchor = SausageThreatDB.framePoint; SausageThreatDB.framePoint = nil end
             if not SausageThreatDB.frameY or SausageThreatDB.frameY < 0 then SausageThreatDB.frameX = UIParent:GetWidth() / 2; SausageThreatDB.frameY = UIParent:GetHeight() - 100 end
+            SausageThreatDB.assignedRoles = SausageThreatDB.assignedRoles or {}
+            
+            if SausageThreatDB.radialRingType and RadialMenu and RadialMenu.customRing then
+                RadialMenu.customRing:SetTexture(GetRingPath(SausageThreatDB.radialRingType))
+            end
 
             MainFrame:ClearAllPoints(); CreateGridButtons()
             if SausageThreatDB.isShown == false or SausageThreatDB.autoHide then MainFrame:Hide() else MainFrame:Show() end
             SausageThreatMainFrame_UpdateGrid()
+            
+            -- WotLK safe timer pre načítanie talentov
+            local delayFrame = CreateFrame("Frame")
+            delayFrame.timer = 0
+            delayFrame:SetScript("OnUpdate", function(self, elapsed)
+                self.timer = self.timer + elapsed
+                if self.timer > 4 then
+                    self:SetScript("OnUpdate", nil)
+                    local myRole = DetermineMyRole()
+                    if SausageThreatDB then
+                        SausageThreatDB.assignedRoles[UnitName("player")] = myRole
+                    end
+                    SendComm("MY_ROLE:"..myRole)
+                end
+            end)
         end
-    elseif event == "PLAYER_ENTERING_WORLD" or event == "GROUP_ROSTER_UPDATE" then
+    elseif event == "PLAYER_ENTERING_WORLD" or event == "GROUP_ROSTER_UPDATE" or event == "PLAYER_TALENT_UPDATE" then
+        if event == "PLAYER_ENTERING_WORLD" or event == "PLAYER_TALENT_UPDATE" then
+            local myRole = DetermineMyRole()
+            SausageThreatDB.assignedRoles = SausageThreatDB.assignedRoles or {}
+            SausageThreatDB.assignedRoles[UnitName("player")] = myRole
+            SendComm("MY_ROLE:"..myRole)
+        end
+        
         if IsInRaid() and (IsRaidLeader() or IsRaidOfficer()) or isTestMode then CoordFrame:Show() else CoordFrame:Hide() end
         local changed = false; for i = #activePaladins, 1, -1 do if not UnitInRaid(activePaladins[i].name) and not UnitInParty(activePaladins[i].name) then table.remove(activePaladins, i); changed = true end end
         SortPaladins(); SausageThreatMainFrame_UpdateGrid(); if SettingsFrame:IsShown() then UpdateIgnoreScrollFrame() end; BroadcastStatus()
         if event == "PLAYER_ENTERING_WORLD" and not (IsRaidLeader() or IsRaidOfficer()) then SendComm("REQ_IGNORE") end
     elseif event == "PLAYER_REGEN_DISABLED" then
+
         inCombat = true; if SausageThreatDB and SausageThreatDB.autoHide then MainFrame:Show() end
     elseif event == "PLAYER_REGEN_ENABLED" then
         inCombat = false; focusTarget, focusTargetClass = nil, nil; if SausageThreatDB and SausageThreatDB.autoHide then MainFrame:Hide() end; SausageThreatMainFrame_UpdateGrid() 
@@ -1136,6 +1435,14 @@ EventFrame:SetScript("OnEvent", function(self, event, ...)
 
             if cmd == "CHECK" then SendComm("VERSION:"..SAUSAGE_VERSION)
             elseif cmd == "VERSION" then print("|cFFFFFF00[SausageThreat]|r " .. sender .. " má verziu " .. args[2])
+            elseif cmd == "MY_ROLE" then
+                SausageThreatDB.assignedRoles = SausageThreatDB.assignedRoles or {}
+                SausageThreatDB.assignedRoles[sender] = args[2]
+                if not InCombatLockdown() then SausageThreatMainFrame_UpdateGrid() end
+            elseif cmd == "SET_ROLE" then
+                SausageThreatDB.assignedRoles = SausageThreatDB.assignedRoles or {}
+                SausageThreatDB.assignedRoles[args[2]] = args[3]
+                if not InCombatLockdown() then SausageThreatMainFrame_UpdateGrid() end
             elseif cmd == "SYNC_LIST" then
                 local listKey = (args[2] == "PALA" and "showListPala") or (args[2] == "HUNT" and "showListHunt") or (args[2] == "ROGUE" and "showListRogue") or (args[2] == "MASTER" and "showListMaster")
                 if listKey and args[3] then
@@ -1157,6 +1464,12 @@ EventFrame:SetScript("OnEvent", function(self, event, ...)
             elseif cmd == "PRE_CAST" then -- Vizuálne zmeny iba
             elseif cmd == "PING_CAST" then
                 local targetName, assignedName, targetClass = args[2], args[3], args[4]
+                
+                if SausageThreatDB and SausageThreatDB.cmdLockout then
+                    lockedSpells[targetName] = lockedSpells[targetName] or {}
+                    lockedSpells[targetName][targetClass] = GetTime() + SausageThreatDB.cmdLockout
+                end
+                
                 if assignedName == UnitName("player") then
                     local targetUnit = GetUnitByName(targetName)
                     if targetUnit and mySpellName and IsSpellInRange(mySpellName, targetUnit) == 0 then
@@ -1185,6 +1498,10 @@ EventFrame:SetScript("OnEvent", function(self, event, ...)
                     focusTarget, focusTargetClass = nil, nil; BroadcastStatus()
                 end
                 
+                if spellId == TRICKS_SPELL_ID and sourceName == UnitName("player") then
+                    if GetUnitRoleFromName(destName) == "DPS" then totTargetIsDPS = true else totTargetIsDPS = false end
+                end
+                
                 -- Zapísanie do vizuálneho trackera (pre všetkých v raide)
                 local bType = (spellId == SALVA_SPELL_ID and "PALA") or (spellId == MISDIRECT_SPELL_ID and "HUNT") or (spellId == TRICKS_SPELL_ID and "ROGUE")
                 local icon = (spellId == SALVA_SPELL_ID and "Interface\\Icons\\Spell_Holy_SealOfSalvation") or (spellId == MISDIRECT_SPELL_ID and "Interface\\Icons\\Ability_Hunter_Misdirection") or (spellId == TRICKS_SPELL_ID and "Interface\\Icons\\Ability_Rogue_TricksOftheTrade")
@@ -1198,8 +1515,8 @@ EventFrame:SetScript("OnEvent", function(self, event, ...)
 end)
 
 -- [[ SLASH COMMANDS ]]
-SLASH_SausageThreat1 = "/ssalva"
-SLASH_SausageThreat2 = "/salva"
+SLASH_SausageThreat1 = "/sthreat"
+SLASH_SausageThreat2 = "/sth"
 SlashCmdList["SausageThreat"] = function(msg)
     msg = (msg or ""):lower()
     if msg == "center" then
