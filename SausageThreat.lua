@@ -39,7 +39,8 @@ local defaultDB = {
     hideBackground = false,
     showRoles = true,
     cmdLockout = 3,
-    radialRingType = 1
+    radialRingType = 1,
+    minimapPos = 180 -- SDS Default
 }
 
 local inCombat = false
@@ -306,11 +307,13 @@ MainFrame:SetScript("OnShow", function()
 end)
 
 MainFrame:SetBackdrop({
-    bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
+    bgFile = "Interface\\ChatFrame\\ChatFrameBackground",
     edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-    tile = true, tileSize = 16, edgeSize = 12,
+    tile = true, tileSize = 16, edgeSize = 14,
     insets = { left = 3, right = 3, top = 3, bottom = 3 }
 })
+MainFrame:SetBackdropColor(0.05, 0.05, 0.05, 0.95)
+MainFrame:SetBackdropBorderColor(1, 0.6, 0, 1) -- Sausage Party Orange
 
 local header = MainFrame:CreateTexture(nil, "OVERLAY")
 header:SetTexture("Interface\\DialogFrame\\UI-DialogBox-Header")
@@ -319,7 +322,7 @@ header:SetPoint("TOP", 0, 12)
 
 local title = MainFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
 title:SetPoint("TOP", header, "TOP", 0, -14)
-title:SetText("Sausage Threat")
+title:SetText("|cffff8800Sausage|r Threat")
 
 local ContentFrame = CreateFrame("Frame", "SausageThreatContent", MainFrame)
 ContentFrame:SetPoint("TOPLEFT", 15, -35)
@@ -335,7 +338,8 @@ CoordFrame:RegisterForDrag("LeftButton")
 CoordFrame:SetScript("OnDragStart", CoordFrame.StartMoving)
 CoordFrame:SetScript("OnDragStop", function(self) self:StopMovingOrSizing() end)
 CoordFrame:SetBackdrop({ bgFile="Interface\\ChatFrame\\ChatFrameBackground", edgeFile="Interface\\Tooltips\\UI-Tooltip-Border", tile=true, tileSize=16, edgeSize=12, insets={left=3,right=3,top=3,bottom=3} })
-CoordFrame:SetBackdropColor(0,0,0,0.9)
+CoordFrame:SetBackdropColor(0.05, 0.05, 0.05, 0.95)
+CoordFrame:SetBackdropBorderColor(1, 0.6, 0, 0.5)
 CoordFrame:Hide()
 
 local function CreateCoordIcon(class, x, name)
@@ -473,6 +477,71 @@ HandleRadialClick = function(targetClass, overrideTargetName)
     RadialMenu:Hide()
 end
 
+local function CreateMinimapButton()
+    local btn = CreateFrame("Button", "SausageThreatMinimapBtn", Minimap)
+    btn:SetSize(31, 31); btn:SetFrameStrata("MEDIUM"); btn:SetFrameLevel(8)
+    btn:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+    btn:RegisterForDrag("LeftButton")
+    
+    local icon = btn:CreateTexture(nil, "BACKGROUND")
+    icon:SetTexture("Interface\\Icons\\Ability_Paladin_Salvation")
+    icon:SetSize(20, 20); icon:SetPoint("CENTER")
+    
+    local border = btn:CreateTexture(nil, "OVERLAY")
+    border:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder")
+    border:SetSize(52, 52); border:SetPoint("TOPLEFT")
+    border:SetVertexColor(1, 0.6, 0) -- Sausage Party Orange
+    
+    local badge = btn:CreateTexture(nil, "OVERLAY")
+    badge:SetTexture("Interface\\Icons\\Inv_Misc_Food_53")
+    badge:SetSize(12, 12); badge:SetPoint("BOTTOMRIGHT", -2, 2)
+    
+    btn:SetHighlightTexture("Interface\\Minimap\\UI-Minimap-ZoomButton-Highlight")
+
+    local function UpdatePosition()
+        local angle = math.rad(SausageThreatDB.minimapPos or 180)
+        local x, y = math.cos(angle) * 80, math.sin(angle) * 80
+        btn:SetPoint("CENTER", Minimap, "CENTER", x, y)
+    end
+
+    btn:SetScript("OnClick", function(self, button)
+        if button == "LeftButton" then
+            if MainFrame:IsShown() then MainFrame:Hide() else MainFrame:Show() end
+        elseif button == "RightButton" then
+            isTestMode = not isTestMode
+            SausageThreatMainFrame_UpdateGrid()
+            print("|cffff8800Sausage|r Threat: Test Mode " .. (isTestMode and "|cff00ff00ON|r" or "|cffff0000OFF|r"))
+        end
+    end)
+
+    btn:SetScript("OnDragStart", function(self)
+        self:LockHighlight()
+        self:SetScript("OnUpdate", function()
+            local xpos, ypos = GetCursorPosition()
+            local xmin, ymin = Minimap:GetLeft(), Minimap:GetBottom()
+            local scale = Minimap:GetEffectiveScale()
+            xpos, ypos = (xpos / scale) - xmin - 70, (ypos / scale) - ymin - 70
+            local angle = math.deg(math.atan2(ypos, xpos))
+            if angle < 0 then angle = angle + 360 end
+            SausageThreatDB.minimapPos = angle
+            UpdatePosition()
+        end)
+    end)
+    btn:SetScript("OnDragStop", function(self) self:UnlockHighlight(); self:SetScript("OnUpdate", nil) end)
+
+    btn:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_LEFT")
+        GameTooltip:AddLine("|cffff8800Sausage|r Threat", 1, 1, 1)
+        GameTooltip:AddLine("|cffff8800Sausage Party Member|r")
+        GameTooltip:AddLine("Left Click: Toggle Main Window", 1, 0.8, 0)
+        GameTooltip:AddLine("Right Click: Toggle Test Mode", 1, 0.8, 0)
+        GameTooltip:Show()
+    end)
+    btn:SetScript("OnLeave", GameTooltip_Hide)
+
+    UpdatePosition()
+end
+
 RadialMenu:SetScript("OnUpdate", function(self)
     if not self:IsShown() then return end
     
@@ -536,7 +605,7 @@ SausageThreatMainFrame_UpdateGrid = function()
         MainFrame:SetBackdropBorderColor(1, 1, 1, 1)
     end
 
-    if SausageThreatDB.hideBackground then MainFrame:SetBackdropColor(0,0,0,0) else MainFrame:SetBackdropColor(0,0,0,1) end
+    if SausageThreatDB.hideBackground then MainFrame:SetBackdropColor(0,0,0,0) else MainFrame:SetBackdropColor(0.05, 0.05, 0.05, 0.95) end
     if SausageThreatDB.hideHeader then header:Hide(); title:Hide() else header:Show(); title:Show() end
 
     ContentFrame:ClearAllPoints()
@@ -564,7 +633,8 @@ SausageThreatMainFrame_UpdateGrid = function()
         local unitName = nil
         if isTestMode and i <= 25 then unitName = "TestPlayer " .. i elseif unit then unitName = UnitName(unit) end
 
-        if unitName and (isTestMode or (unit and showList[unitName])) then
+        local isExplicitlyHidden = (unitName and showList and showList[unitName] == false)
+        if unitName and (isTestMode or (unit and not isExplicitlyHidden)) then
             btn:SetAttribute("unit", isTestMode and nil or unit)
             btn.targetUnit = isTestMode and "player" or unit
             btn.unitName = unitName
@@ -651,6 +721,15 @@ local function CreateGridButtons()
         btn.pingHighlight:SetAllPoints()
         btn.pingHighlight:SetBlendMode("ADD")
         btn.pingHighlight:Hide()
+        
+        -- Success Glow for cast feedback
+        btn.successGlow = btn.border:CreateTexture(nil, "OVERLAY", nil, 7)
+        btn.successGlow:SetTexture("Interface\\Buttons\\CheckButtonHilight")
+        btn.successGlow:SetAllPoints()
+        btn.successGlow:SetBlendMode("ADD")
+        btn.successGlow:SetVertexColor(1, 1, 1, 1)
+        btn.successGlow:Hide()
+        btn.successGlowTime = 0
 
         -- Nová vizuálna IKONA uprostred pingu
         btn.pingIcon = btn:CreateTexture(nil, "OVERLAY", nil, 7)
@@ -682,17 +761,15 @@ local function CreateGridButtons()
         
         btn:SetScript("OnMouseDown", function(self, button)
             if button == "LeftButton" and IsShiftKeyDown() then
-                if IsRaidLeader() or IsRaidOfficer() then
-                    local uName = self.unitName or btn.text:GetText()
-                    if uName then
-                        local curRole = GetUnitRoleFromName(uName)
-                        local newRole = (curRole == "DPS" and "TANK") or (curRole == "TANK" and "HEALER") or "DPS"
-                        SausageThreatDB.assignedRoles = SausageThreatDB.assignedRoles or {}
-                        SausageThreatDB.assignedRoles[uName] = newRole
-                        SendComm("SET_ROLE:"..uName..":"..newRole)
-                        if not InCombatLockdown() then SausageThreatMainFrame_UpdateGrid() end
-                        print("|cFF00CCFF[SausageThreat]|r Role pre " .. uName .. " zmenená na " .. newRole)
-                    end
+                local uName = self.unitName or btn.text:GetText()
+                if uName and (uName == UnitName("player") or IsRaidLeader() or IsRaidOfficer()) then
+                    local curRole = GetUnitRoleFromName(uName)
+                    local newRole = (curRole == "DPS" and "TANK") or (curRole == "TANK" and "HEALER") or "DPS"
+                    SausageThreatDB.assignedRoles = SausageThreatDB.assignedRoles or {}
+                    SausageThreatDB.assignedRoles[uName] = newRole
+                    SendComm("SET_ROLE:"..uName..":"..newRole)
+                    if not InCombatLockdown() then SausageThreatMainFrame_UpdateGrid() end
+                    print("|cFF00CCFF[SausageThreat]|r Role pre " .. uName .. " zmenená na " .. newRole)
                 end
                 return
             end
@@ -777,10 +854,11 @@ UpdateCombatGrid = function(dt)
                         btn.roleIcon:SetTexture("Interface\\LFGFrame\\UI-LFG-ICON-ROLES")
                         btn.roleIcon:SetTexCoord(0.26171875, 0.5234375, 0.0, 0.26171875)
                         btn.roleIcon:Show()
-                    else btn.roleIcon:Hide() end
-                else btn.roleIcon:Hide() end
+                    else
+                        btn.roleIcon:Hide()
+                    end
 
-                local threshold = 90
+                    local threshold = 90
             if not isTestMode and unit then local _, class = UnitClass(unit); threshold = (class == "MAGE" or class == "WARLOCK" or class == "PRIEST") and 110 or 90 end
             local isTestFocus = isTestMode and (i == 5)
             
@@ -859,26 +937,54 @@ UpdateCombatGrid = function(dt)
                     btn.pingHighlight:SetVertexColor(r, g, b, 0.1 + (pulse * 0.2))
                     btn.pingHighlight:Show()
                 elseif threatPct >= threshold then 
-                    -- VYSOKÝ THREAT: Panic indikátor !!
-                    btn.bg:SetVertexColor(1, 0, 0, 0.9)
-                    btn.text:SetTextColor(1, 1, 1, 1)
-                    btn.threatText:SetTextColor(1, 1, 1, 1)
-                    local invPulse = 1 - pulse
-                    btn.warnLeft:SetAlpha(0.2 + (invPulse * 0.8))
-                    btn.warnRight:SetAlpha(0.2 + (invPulse * 0.8))
-                    btn.warnLeft:Show(); btn.warnRight:Show()
-                    
-                    -- ZAHRAJ ZVUK (LEN PRE RL / TANKOV), ak prave prekrocil threshold
-                    if IsEligibleForThreatSound() and not btn.threatSoundWarned and SausageThreatDB.enableSound then
-                        local now = GetTime()
-                        if now - globalThreatSoundTime > 3 then
-                            local isBoss = (UnitLevel("target") == -1) or (UnitClassification("target") == "worldboss")
-                            if not SausageThreatDB.bossOnlyAlert or isBoss then
-                                PlaySoundFile(THREAT_SOUND, "Master")
-                                globalThreatSoundTime = now
-                            end
+                    local isTank = (role == "TANK")
+                    if isTank then
+                        -- TANK LOGIC: Green when aggro, Blue when lost
+                        local status = UnitDetailedThreatSituation(unit, "target") or 0
+                        if status >= 2 then
+                            -- Secure Aggro
+                            btn.bg:SetVertexColor(0, 0.8, 0, 0.9) -- Green
+                            btn.warnLeft:Hide(); btn.warnRight:Hide()
+                        else
+                            -- Lost Aggro: BLUE ALERT
+                            btn.bg:SetVertexColor(0, 0.5, 1, 0.9) -- Blue/Cyan
+                            btn.text:SetTextColor(1, 1, 1, 1)
+                            btn.threatText:SetTextColor(1, 1, 1, 1)
+                            btn.warnLeft:SetText("??"); btn.warnRight:SetText("??")
+                            btn.warnLeft:SetTextColor(0, 0.8, 1)
+                            btn.warnRight:SetTextColor(0, 0.8, 1)
+                            local invPulse = 1 - pulse
+                            btn.warnLeft:SetAlpha(0.2 + (invPulse * 0.8))
+                            btn.warnRight:SetAlpha(0.2 + (invPulse * 0.8))
+                            btn.warnLeft:Show(); btn.warnRight:Show()
                         end
-                        btn.threatSoundWarned = true
+                        btn.threatSoundWarned = false -- No sound for tanks
+                    else
+                        -- DPS/HEAL HIGH THREAT: Panic indicator !!
+                        btn.bg:SetVertexColor(1, 0, 0, 0.9)
+                        btn.text:SetTextColor(1, 1, 1, 1)
+                        btn.threatText:SetTextColor(1, 1, 1, 1)
+                        btn.warnLeft:SetText("!!"); btn.warnRight:SetText("!!")
+                        btn.warnLeft:SetTextColor(1, 0, 0)
+                        btn.warnRight:SetTextColor(1, 0, 0)
+                        local invPulse = 1 - pulse
+                        btn.warnLeft:SetAlpha(0.2 + (invPulse * 0.8))
+                        btn.warnRight:SetAlpha(0.2 + (invPulse * 0.8))
+                        btn.warnLeft:Show(); btn.warnRight:Show()
+                        
+                        -- ZAHRAJ ZVUK (LEN PRE RL / TANKOV), ak prave prekrocil threshold
+                        local myRole = GetUnitRoleFromName(UnitName("player"))
+                        if IsEligibleForThreatSound() and myRole ~= "TANK" and not btn.threatSoundWarned and SausageThreatDB.enableSound then
+                            local now = GetTime()
+                            if now - globalThreatSoundTime > 3 then
+                                local isBoss = (UnitLevel("target") == -1) or (UnitClassification("target") == "worldboss")
+                                if not SausageThreatDB.bossOnlyAlert or isBoss then
+                                    PlaySoundFile(THREAT_SOUND, "Master")
+                                    globalThreatSoundTime = now
+                                end
+                            end
+                            btn.threatSoundWarned = true
+                        end
                     end
                 elseif threatPct > 0 then 
                     btn.warnLeft:Hide(); btn.warnRight:Hide()
@@ -891,9 +997,19 @@ UpdateCombatGrid = function(dt)
                     btn.bg:SetVertexColor(1, 1, 1, 0.9) 
                 end
             end
+
+                -- Success Glow Animation
+                if btn.successGlowTime > 0 then
+                    btn.successGlowTime = btn.successGlowTime - dt
+                    btn.successGlow:SetAlpha(math.min(1, btn.successGlowTime / 0.25))
+                    btn.successGlow:Show()
+                else
+                    btn.successGlow:Hide()
+                end
+            end
         end
     end
-end
+    end
 end
 
 -- [[ UPDATE / GITHUB CUSTOM FRAME ]]
@@ -1288,7 +1404,7 @@ SettingsFrame:SetScript("OnShow", function() if SausageThreatDB then UpdateSetti
 
 -- [[ TEST WINDOW ]]
 local TestFrame = CreateFrame("Frame", "SausageThreatTestFrame", UIParent)
-TestFrame:SetSize(250, 450); TestFrame:SetPoint("CENTER", 300, 0); TestFrame:SetBackdrop(SettingsFrame:GetBackdrop()); TestFrame:SetBackdropColor(0,0,0,1); TestFrame:SetMovable(true); TestFrame:EnableMouse(true); TestFrame:RegisterForDrag("LeftButton"); TestFrame:SetScript("OnDragStart", TestFrame.StartMoving); TestFrame:SetScript("OnDragStop", TestFrame.StopMovingOrSizing); TestFrame:Hide()
+TestFrame:SetSize(250, 450); TestFrame:SetPoint("CENTER", 300, 0); TestFrame:SetBackdrop(SettingsFrame:GetBackdrop()); TestFrame:SetBackdropColor(0.05, 0.05, 0.05, 0.95); TestFrame:SetMovable(true); TestFrame:EnableMouse(true); TestFrame:RegisterForDrag("LeftButton"); TestFrame:SetScript("OnDragStart", TestFrame.StartMoving); TestFrame:SetScript("OnDragStop", TestFrame.StopMovingOrSizing); TestFrame:Hide()
 local testHeader = TestFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal"); testHeader:SetPoint("TOP", 0, -15); testHeader:SetText("SausageThreat Debug")
 
 local function CreateTestButton(text, y, func)
@@ -1327,27 +1443,24 @@ CreateTestButton("Test THREAT Sound", -345, function() if THREAT_SOUND then Play
 CreateTestButton("Close Test Window", -390, function() TestFrame:Hide() end)
 
 -- [[ MINIMAP IKONA ]]
-local minimapIcon = CreateFrame("Button", "SausageThreatMinimapIcon", Minimap)
-minimapIcon:SetSize(32, 32); minimapIcon:SetPoint("TOPLEFT", Minimap, "TOPLEFT", 0, 0)
-local iconTex = minimapIcon:CreateTexture(nil, "BACKGROUND"); iconTex:SetTexture("Interface\\Icons\\Inv_Misc_Food_54"); iconTex:SetSize(20, 20); iconTex:SetPoint("CENTER")
-local iconBorder = minimapIcon:CreateTexture(nil, "OVERLAY"); iconBorder:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder"); iconBorder:SetSize(54, 54); iconBorder:SetPoint("TOPLEFT", 0, 0)
-minimapIcon:RegisterForClicks("LeftButtonUp", "RightButtonUp"); minimapIcon:RegisterForDrag("RightButton")
-local isDragging = false
-minimapIcon:SetScript("OnDragStart", function(self)
-    self:LockHighlight(); isDragging = true
-    self:SetScript("OnUpdate", function(self)
-        local xpos, ypos = GetCursorPosition(); local xmin, ymin = Minimap:GetLeft(), Minimap:GetBottom()
-        xpos = xmin - xpos/UIParent:GetScale() + 70; ypos = ypos/UIParent:GetScale() - ymin - 70
-        local angle = math.deg(math.atan2(ypos, xpos))
-        local x, y = math.cos(math.rad(angle)) * 80, math.sin(math.rad(angle)) * 80
-        self:SetPoint("TOPLEFT", Minimap, "TOPLEFT", 52 - x, y - 52)
-    end)
-end)
-minimapIcon:SetScript("OnDragStop", function(self) self:UnlockHighlight(); isDragging = false; self:SetScript("OnUpdate", nil) end)
-minimapIcon:SetScript("OnClick", function(self, button)
-    if isDragging then return end
-    if button == "LeftButton" then if IsShiftKeyDown() then if SettingsFrame:IsShown() then SettingsFrame:Hide() else SettingsFrame:Show() end else if MainFrame:IsShown() then MainFrame:Hide() else MainFrame:Show() end end end
-end)
+-- local minimapIcon removed for SDS
+-- minimapIcon:SetSize(32, 32); minimapIcon:SetPoint("TOPLEFT", Minimap, "TOPLEFT", 0, 0)
+-- local iconTex = minimapIcon:CreateTexture(nil, "BACKGROUND"); iconTex:SetTexture("Interface\\Icons\\Inv_Misc_Food_54"); iconTex:SetSize(20, 20); iconTex:SetPoint("CENTER")
+-- local iconBorder = minimapIcon:CreateTexture(nil, "OVERLAY"); iconBorder:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder"); iconBorder:SetSize(54, 54); iconBorder:SetPoint("TOPLEFT", 0, 0)
+-- minimapIcon:RegisterForClicks("LeftButtonUp", "RightButtonUp"); minimapIcon:RegisterForDrag("RightButton")
+-- local isDragging = false
+-- minimapIcon:SetScript("OnDragStart", function(self)
+--    self:LockHighlight(); isDragging = true
+--    self:SetScript("OnUpdate", function(self)
+--        local xpos, ypos = GetCursorPosition(); local xmin, ymin = Minimap:GetLeft(), Minimap:GetBottom()
+--        xpos = xmin - xpos/UIParent:GetScale() + 70; ypos = ypos/UIParent:GetScale() - ymin - 70
+--        local angle = math.deg(math.atan2(ypos, xpos))
+--        local x, y = math.cos(math.rad(angle)) * 80, math.sin(math.rad(angle)) * 80
+--        self:SetPoint("TOPLEFT", Minimap, "TOPLEFT", 52 - x, y - 52)
+--    end)
+-- end)
+-- minimapIcon:SetScript("OnDragStop", ... )
+-- minimapIcon:SetScript("OnClick", ... )
 
 -- [[ EVENTY ]]
 EventFrame:RegisterEvent("ADDON_LOADED")
@@ -1386,6 +1499,7 @@ EventFrame:SetScript("OnEvent", function(self, event, ...)
             end
 
             MainFrame:ClearAllPoints(); CreateGridButtons()
+            CreateMinimapButton()
             if SausageThreatDB.isShown == false or SausageThreatDB.autoHide then MainFrame:Hide() else MainFrame:Show() end
             SausageThreatMainFrame_UpdateGrid()
             
@@ -1527,6 +1641,17 @@ EventFrame:SetScript("OnEvent", function(self, event, ...)
                 local duration = (spellId == MISDIRECT_SPELL_ID and 4) or (spellId == TRICKS_SPELL_ID and 6) or 10
                 activeBuffsOnTarget[destName] = activeBuffsOnTarget[destName] or {}
                 activeBuffsOnTarget[destName][bType] = { expiry = GetTime() + duration, icon = icon }
+                
+                -- Trigger Success Glow on button
+                if sourceName == UnitName("player") then
+                    for i = 1, 40 do
+                        local btn = unitButtons[i]
+                        if btn and btn:IsShown() and btn.unitName == destName then
+                            btn.successGlowTime = 0.25
+                            break
+                        end
+                    end
+                end
             end
         end
     end
