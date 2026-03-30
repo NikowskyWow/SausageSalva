@@ -1513,7 +1513,7 @@ btnTestGrid:SetSize(100, 25); btnTestGrid:SetPoint("LEFT", btnCheckStatus, "RIGH
 btnTestGrid:SetScript("OnClick", function()
     isTestMode = not isTestMode
     if isTestMode then CoordFrame:Show(); MainFrame:Show(); EventFrame:SetScript("OnUpdate", function(self, elapsed) UpdateCombatGrid(elapsed) end)
-    else if not inCombat then if not (IsInRaid() and (IsRaidLeader() or IsRaidOfficer())) then CoordFrame:Hide() end; if SausageThreatDB.autoHide then MainFrame:Hide() end; EventFrame:SetScript("OnUpdate", nil) end end
+    else if not inCombat then if not (IsInRaid() and (IsRaidLeader() or IsRaidOfficer())) then CoordFrame:Hide() end; if SausageThreatDB.autoHide then MainFrame:Hide() else EventFrame:SetScript("OnUpdate", function(self, elapsed) UpdateCombatGrid(elapsed) end) end end end
     SortPaladins(); if not InCombatLockdown() then SausageThreatMainFrame_UpdateGrid() end
 end)
 
@@ -1792,6 +1792,8 @@ EventFrame:SetScript("OnEvent", function(self, event, ...)
     elseif event == "PLAYER_REGEN_DISABLED" then
 
         inCombat = true; if SausageThreatDB and SausageThreatDB.autoHide then MainFrame:Show() end
+        -- Zaistenie behu OnUpdate aj ked bol zastaveny predom (grid rebuild mimo boja)
+        if MainFrame:IsShown() then EventFrame:SetScript("OnUpdate", function(self, elapsed) UpdateCombatGrid(elapsed) end) end
     elseif event == "PLAYER_REGEN_ENABLED" then
         inCombat = false; focusTarget, focusTargetClass = nil, nil; if SausageThreatDB and SausageThreatDB.autoHide then MainFrame:Hide() end; SausageThreatMainFrame_UpdateGrid()
         -- Automatické uvoľnenie zámku po skončení boja
