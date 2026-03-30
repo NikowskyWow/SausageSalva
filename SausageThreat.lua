@@ -579,9 +579,9 @@ HandleRadialClick = function(targetClass, overrideTargetName)
     for _, p in ipairs(activePaladins) do
         local penaltyUntil = (rangeFailTracker[targetName] and rangeFailTracker[targetName][p.name]) or 0
         if now >= penaltyUntil then
-            if (targetClass == "PALA" and p.spec <= 3) or 
-               (targetClass == "HUNT" and p.spec == 4) or 
-               (targetClass == "ROGUE" and p.spec == 5) then
+            if (targetClass == "PALA" and p.spec <= 3 and p.isReady) or
+               (targetClass == "HUNT" and p.spec == 4 and p.isReady) or
+               (targetClass == "ROGUE" and p.spec == 5 and p.isReady) then
                 table.insert(potentialUnits, p.name)
             end
         end
@@ -755,8 +755,17 @@ local function CreateGridButtons()
         btn.bg = btn:CreateTexture(nil, "BACKGROUND")
         btn.bg:SetAllPoints()
         btn.bg:SetTexture("Interface\\TargetingFrame\\UI-StatusBar")
-        btn.bg:SetVertexColor(0.2, 0.2, 0.2, 0.9)
-        
+        btn.bg:SetVertexColor(0.15, 0.15, 0.15, 0.9) -- Permanentne tmavý základ, farby riadi threatBar
+
+        -- Threat fill bar: šírka = proporcionálne k threat%, farba = aktuálny stav
+        btn.threatBar = btn:CreateTexture(nil, "ARTWORK")
+        btn.threatBar:SetTexture("Interface\\TargetingFrame\\UI-StatusBar")
+        btn.threatBar:SetPoint("TOPLEFT")
+        btn.threatBar:SetPoint("BOTTOMLEFT")
+        btn.threatBar:SetWidth(1)
+        btn.threatBar:SetVertexColor(0.2, 0.8, 0.2, 0.9)
+        btn.threatBar:Hide()
+
         btn.border = CreateFrame("Frame", nil, btn)
         btn.border:SetAllPoints()
         btn.border:SetBackdrop({ edgeFile = "Interface\\Buttons\\WHITE8X8", edgeSize = 1 })
@@ -920,7 +929,7 @@ UpdateCombatGrid = function(dt)
             
             if isOffline then
                 btn:SetAlpha(0.2)
-                btn.bg:SetVertexColor(0.2, 0.2, 0.2, 0.9)
+                btn.threatBar:Hide()
                 btn.text:SetTextColor(0.5, 0.5, 0.5, 1)
                 btn.threatText:SetTextColor(0.5, 0.5, 0.5, 1)
                 btn.threatText:SetText("|cFF888888OFF|r")
@@ -1020,7 +1029,13 @@ UpdateCombatGrid = function(dt)
                 btn.buffTimer:Hide()
             end
 
-            -- Vyhodnotenie farieb pre PING pulz
+            -- Nastav šírku threat baru úmerne k % threatu (min 1px)
+            local btnW = btn:GetWidth()
+            local barWidth = math.max(1, math.min((threatPct / 100) * btnW, btnW))
+            btn.threatBar:SetWidth(barWidth)
+            btn.threatBar:Show()
+
+            -- Vyhodnotenie farieb a stavov — farba sa aplikuje na threatBar, nie na bg
             if inFocusMode then
                 local isThisFocus = (unitName and focusTarget and string.lower(unitName) == string.lower(focusTarget))
                 if isThisFocus then
@@ -1028,16 +1043,16 @@ UpdateCombatGrid = function(dt)
                     if isTestMode then
                         colorKey = (debugClass == "HUNTER" and "HUNT" or debugClass == "ROGUE" and "ROGUE" or "PALA")
                     end
-                    
+
                     local r, g, b = 1, 1, 1
                     if colorKey == "PALA" then r, g, b = 0.96, 0.55, 0.73
                     elseif colorKey == "HUNT" then r, g, b = 0.67, 0.83, 0.45
                     elseif colorKey == "ROGUE" then r, g, b = 1.00, 0.96, 0.41 end
 
-                    btn.bg:SetVertexColor(r * 0.3, g * 0.3, b * 0.3, 0.9)
+                    btn.threatBar:SetVertexColor(r, g, b, 0.5 + (pulse * 0.4))
                     btn.pingHighlight:SetVertexColor(r, g, b, 0.4 + (pulse * 0.6))
                     btn.pingHighlight:Show()
-                    
+
                     -- Zobrazenie PING ikony (Salva/MD/Tricks)
                     local iconPath = "Interface\\Icons\\Spell_Holy_SealOfSalvation"
                     if colorKey == "HUNT" then iconPath = "Interface\\Icons\\Ability_Hunter_Misdirection"
@@ -1046,7 +1061,9 @@ UpdateCombatGrid = function(dt)
                     btn.pingIcon:SetAlpha(0.3 + (pulse * 0.7))
                     btn.pingIcon:Show()
                 else
-                    btn.bg:SetVertexColor(0.1, 0.1, 0.1, 0.5)
+                    -- Non-focus hráči: zúž bar na minimum
+                    btn.threatBar:SetWidth(1)
+                    btn.threatBar:SetVertexColor(0.2, 0.2, 0.2, 0.5)
                     btn.pingHighlight:Hide()
                     btn.pingIcon:Hide()
                 end
@@ -1054,27 +1071,27 @@ UpdateCombatGrid = function(dt)
                 btn.pingHighlight:Hide()
                 btn.pingIcon:Hide()
                 if hasSalva then
-                    -- Aktívny buff: Jemné farebné pulzovanie podľa spellu
+                    -- Aktívny buff: farebné pulzovanie podľa spellu na bare
                     local r, g, b = 1, 1, 1
                     if buffType == "PALA" then r, g, b = 0.96, 0.55, 0.73
                     elseif buffType == "HUNT" then r, g, b = 0.67, 0.83, 0.45
                     elseif buffType == "ROGUE" then r, g, b = 1.00, 0.96, 0.41 end
-                    
-                    btn.bg:SetVertexColor(r * (0.15 + pulse * 0.15), g * (0.15 + pulse * 0.15), b * (0.15 + pulse * 0.15), 0.9)
+
+                    btn.threatBar:SetVertexColor(r * (0.3 + pulse * 0.5), g * (0.3 + pulse * 0.5), b * (0.3 + pulse * 0.5), 0.9)
                     btn.pingHighlight:SetVertexColor(r, g, b, 0.1 + (pulse * 0.2))
                     btn.pingHighlight:Show()
-                elseif threatPct >= threshold then 
+                elseif threatPct >= threshold then
                     local isTank = (role == "TANK")
                     if isTank then
                         -- TANK LOGIC: Green when aggro, Blue when lost
                         local status = UnitDetailedThreatSituation(unit, "target") or 0
                         if status >= 2 then
                             -- Secure Aggro
-                            btn.bg:SetVertexColor(0, 0.8, 0, 0.9) -- Green
+                            btn.threatBar:SetVertexColor(0, 0.8, 0, 0.9)
                             btn.warnLeft:Hide(); btn.warnRight:Hide()
                         else
                             -- Lost Aggro: BLUE ALERT
-                            btn.bg:SetVertexColor(0, 0.5, 1, 0.9) -- Blue/Cyan
+                            btn.threatBar:SetVertexColor(0, 0.5, 1, 0.9)
                             btn.text:SetTextColor(1, 1, 1, 1)
                             btn.threatText:SetTextColor(1, 1, 1, 1)
                             btn.warnLeft:SetText("??"); btn.warnRight:SetText("??")
@@ -1088,7 +1105,7 @@ UpdateCombatGrid = function(dt)
                         btn.threatSoundWarned = false -- No sound for tanks
                     else
                         -- DPS/HEAL HIGH THREAT: Panic indicator !!
-                        btn.bg:SetVertexColor(1, 0, 0, 0.9)
+                        btn.threatBar:SetVertexColor(1, 0, 0, 0.9)
                         btn.text:SetTextColor(1, 1, 1, 1)
                         btn.threatText:SetTextColor(1, 1, 1, 1)
                         btn.warnLeft:SetText("!!"); btn.warnRight:SetText("!!")
@@ -1098,8 +1115,8 @@ UpdateCombatGrid = function(dt)
                         btn.warnLeft:SetAlpha(0.2 + (invPulse * 0.8))
                         btn.warnRight:SetAlpha(0.2 + (invPulse * 0.8))
                         btn.warnLeft:Show(); btn.warnRight:Show()
-                        
-                        -- ZAHRAJ ZVUK (LEN PRE RL / TANKOV), ak prave prekrocil threshold
+
+                        -- Zahraj zvuk (len pre RL / tankov), ak práve prekročil threshold
                         local myRole = GetUnitRoleFromName(UnitName("player"))
                         if IsEligibleForThreatSound() and myRole ~= "TANK" and not btn.threatSoundWarned and SausageThreatDB.enableSound then
                             local now = GetTime()
@@ -1113,15 +1130,18 @@ UpdateCombatGrid = function(dt)
                             btn.threatSoundWarned = true
                         end
                     end
-                elseif threatPct > 0 then 
+                elseif threatPct > 0 then
                     btn.warnLeft:Hide(); btn.warnRight:Hide()
                     btn.threatSoundWarned = false
+                    -- Gradient: biela (nízky threat) → červená (blízko thresholdu)
                     local fade = 1 - (threatPct / threshold)
-                    btn.bg:SetVertexColor(1, fade, fade, 0.9)
-                else 
+                    btn.threatBar:SetVertexColor(1, fade, fade, 0.9)
+                else
+                    -- Nulový threat: skry bar
                     btn.warnLeft:Hide(); btn.warnRight:Hide()
                     btn.threatSoundWarned = false
-                    btn.bg:SetVertexColor(1, 1, 1, 0.9) 
+                    btn.threatBar:SetWidth(1)
+                    btn.threatBar:SetVertexColor(0.2, 0.2, 0.2, 0.5)
                 end
             end
 
