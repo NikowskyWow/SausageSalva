@@ -724,6 +724,20 @@ SausageThreatMainFrame_UpdateGrid = function()
             btn:ClearAllPoints(); btn:SetPoint("TOPLEFT", col * (boxWidth + spacing), -row * (boxHeight + spacing))
             btn:Show(); btn:SetAlpha(1)
 
+            -- Ihneď nastav role ikonu bez čakania na OnUpdate
+            local uRole = GetUnitRoleFromName(unitName)
+            if uRole == "TANK" then
+                btn.roleIcon:SetTexture("Interface\\LFGFrame\\UI-LFG-ICON-ROLES")
+                btn.roleIcon:SetTexCoord(0, 0.26171875, 0.26171875, 0.5234375)
+                btn.roleIcon:Show()
+            elseif uRole == "HEALER" then
+                btn.roleIcon:SetTexture("Interface\\LFGFrame\\UI-LFG-ICON-ROLES")
+                btn.roleIcon:SetTexCoord(0.26171875, 0.5234375, 0.0, 0.26171875)
+                btn.roleIcon:Show()
+            else
+                btn.roleIcon:Hide()
+            end
+
             activeCount = activeCount + 1
             col = col + 1; if col >= maxCols then col = 0; row = row + 1 end
         else
