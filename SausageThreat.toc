@@ -2,7 +2,7 @@
 ## Title: SausageThreat
 ## Notes: Paladin threat tracker and Hand of Salvation coordinator.
 ## Author: Sausage Party / Kokotiar
-## Version: 0.9 (Beta)
+## Version: SAUSAGE_VERSION
 ## SavedVariables: SausageThreatDB
 
 SausageThreat.lua

@@ -63,6 +63,8 @@ local defaultDB = {
     showRoles = true,
     cmdLockout = 3,
     radialRingType = 1,
+    threatThresholdMelee = 90,  -- Prah threatu pre melee/tankov/healov (%)
+    threatThresholdCaster = 110, -- Prah threatu pre castorov: Mage, Warlock, Priest (%)
     minimapPos = 180 -- SDS Default
 }
 
@@ -79,6 +81,11 @@ local preCastTimer = 0
 local rangeFailTracker = {}
 local activeBuffsOnTarget = {} -- Tracker pre MD a ToT (meno -> cas vyprsania)
 local lockedSpells = {} -- Cooldown na povely pre hraca
+
+local lockedThreatGUID = nil -- GUID zamknutého threat targetu
+local lockedThreatName = nil -- Meno zamknutého threat targetu (pre zobrazenie na tlačidle)
+local coordRefreshTimer = 0  -- Timer na periodickú aktualizáciu CoordFrame odpočítavania
+local totTargetIsDPS = false -- Sleduje, či bol ToT použitý na DPS cieľ (pre auto-cancel)
 
 -- [[ PRED-DEKLARÁCIE ]]
 local EventFrame = CreateFrame("Frame")
@@ -269,8 +276,9 @@ end
 SortPaladins = function()
     CleanupPaladinList()
     table.sort(activePaladins, function(a, b) return a.spec < b.spec end)
-    
+
     local palas, hunts, rogues = {}, {}, {}
+    local now = GetTime()
     for _, p in ipairs(activePaladins) do
         local color = "|cFFFFFFFF"
         if p.spec == 1 then color = "|cFFFFFF00" -- Holy
@@ -279,7 +287,18 @@ SortPaladins = function()
         elseif p.spec == 4 then color = "|cFFABD473" -- Hunter
         elseif p.spec == 5 then color = "|cFFFFF569" -- Rogue
         end
-        local entry = color .. p.name .. "|r"
+
+        -- Zostatok cooldownu: zobraz odpočítavanie ak nie je ready
+        local entry
+        if p.isReady == false and p.cooldownEnd and p.cooldownEnd > now then
+            local cdLeft = math.ceil(p.cooldownEnd - now)
+            entry = color .. p.name .. "|r |cFF888888(" .. cdLeft .. "s)|r"
+        elseif p.isReady == false then
+            entry = color .. p.name .. "|r |cFF888888(CD)|r"
+        else
+            entry = color .. p.name .. "|r"
+        end
+
         if p.spec <= 3 then table.insert(palas, entry)
         elseif p.spec == 4 then table.insert(hunts, entry)
         elseif p.spec == 5 then table.insert(rogues, entry)
@@ -301,14 +320,20 @@ BroadcastStatus = function()
     
     local start, duration = GetSpellCooldown(spell)
     local isReady = 0
+    local remaining = 0
     -- Poistka proti "attempt to compare nil with number"
     if start and duration then
         isReady = (start == 0 or duration <= 1.5) and 1 or 0
+        -- Vypočítaj zostatok cooldownu pre broadcast (prijímač ho zobrazí v CoordFrame)
+        if isReady == 0 and start > 0 then
+            remaining = math.ceil(duration - (GetTime() - start))
+            if remaining < 0 then remaining = 0 end
+        end
     end
 
     local spec = 1
     if isPaladin then spec = GetPaladinSpec() elseif isHunter then spec = 4 elseif isRogue then spec = 5 end
-    SendComm("ANNOUNCE:"..spec..":"..isReady)
+    SendComm("ANNOUNCE:"..spec..":"..isReady..":"..remaining)
 end
 
 -- [[ HLAVNÝ FRAME ]]
@@ -360,6 +385,57 @@ local title = MainFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
 title:SetPoint("TOP", header, "TOP", 0, -14)
 title:SetText("|cffff8800Sausage|r Threat")
 
+-- [[ LOCK TARGET TLAČIDLO ]]
+-- Viditeľné len pre Raid Leadera a Officera
+local lockBtn = CreateFrame("Button", nil, MainFrame, "UIPanelButtonTemplate")
+lockBtn:SetSize(85, 18)
+lockBtn:SetPoint("TOPRIGHT", MainFrame, "TOPRIGHT", -5, -5)
+lockBtn:SetText("Lock Target")
+lockBtn:Hide()
+
+local function UpdateLockBtnVisibility()
+    if IsRaidLeader() or IsRaidOfficer() then
+        lockBtn:Show()
+    else
+        lockBtn:Hide()
+        -- Stratili sme práva, uvoľníme zámok
+        lockedThreatGUID = nil
+        lockedThreatName = nil
+        lockBtn:SetText("Lock Target")
+    end
+end
+
+lockBtn:SetScript("OnClick", function(self)
+    if lockedThreatGUID then
+        -- Odomknúť
+        lockedThreatGUID = nil
+        lockedThreatName = nil
+        self:SetText("Lock Target")
+    else
+        -- Zamknúť na aktuálny nepriateľský target
+        if UnitExists("target") and UnitCanAttack("player", "target") then
+            lockedThreatGUID = UnitGUID("target")
+            lockedThreatName = UnitName("target")
+            self:SetText("|cffffd200" .. (lockedThreatName or "???") .. "|r")
+        else
+            print("|cFFFF8800[SausageThreat]|r Select a valid enemy target to lock.")
+        end
+    end
+end)
+
+lockBtn:SetScript("OnEnter", function(self)
+    _G.GameTooltip:SetOwner(self, "ANCHOR_LEFT")
+    if lockedThreatGUID then
+        _G.GameTooltip:AddLine("Locked: " .. (lockedThreatName or "???"), 1, 0.8, 0)
+        _G.GameTooltip:AddLine("Click to unlock threat target.", 0.7, 0.7, 0.7)
+    else
+        _G.GameTooltip:AddLine("Lock Threat Target", 1, 1, 1)
+        _G.GameTooltip:AddLine("Target an enemy and click to lock\nthreat tracking to that unit.", 0.7, 0.7, 0.7)
+    end
+    _G.GameTooltip:Show()
+end)
+lockBtn:SetScript("OnLeave", function() _G.GameTooltip:Hide() end)
+
 local ContentFrame = CreateFrame("Frame", "SausageThreatContent", MainFrame)
 ContentFrame:SetPoint("TOPLEFT", 15, -35)
 ContentFrame:SetSize(1, 1)
@@ -372,7 +448,14 @@ CoordFrame:SetMovable(true)
 CoordFrame:EnableMouse(true)
 CoordFrame:RegisterForDrag("LeftButton")
 CoordFrame:SetScript("OnDragStart", CoordFrame.StartMoving)
-CoordFrame:SetScript("OnDragStop", function(self) self:StopMovingOrSizing() end)
+CoordFrame:SetScript("OnDragStop", function(self)
+    self:StopMovingOrSizing()
+    -- Uloženie pozície CoordFrame do SavedVariables
+    if SausageThreatDB then
+        SausageThreatDB.coordFrameX = self:GetLeft()
+        SausageThreatDB.coordFrameY = self:GetTop()
+    end
+end)
 CoordFrame:SetBackdrop({ 
     bgFile="Interface\\Tooltips\\UI-Tooltip-Background", 
     edgeFile="Interface\\Tooltips\\UI-Tooltip-Border", 
@@ -486,7 +569,7 @@ HandleRadialClick = function(targetClass, overrideTargetName)
     local targetRole = GetUnitRoleFromName(targetName)
     local canAssign, reason = CanAssignBuffToTarget(targetClass, targetName, targetRole)
     if not canAssign then
-        if reason ~= "COOLDOWN" and reason ~= "ACTIVE" then print("|cFFFF0000[SausageThreat]|r Úloha " .. targetClass .. " blokovaná na role: " .. targetRole .. " (" .. targetName .. ")!") end
+        if reason ~= "COOLDOWN" and reason ~= "ACTIVE" then print("|cFFFF0000[SausageThreat]|r " .. targetClass .. " blocked for role: " .. targetRole .. " (" .. targetName .. ")!") end
         return
     end
     
@@ -695,6 +778,13 @@ local function CreateGridButtons()
         btn.icon = btn:CreateTexture(nil, "OVERLAY")
         btn.icon:SetSize(20, 20); btn.icon:SetPoint("RIGHT", -2, 0); btn.icon:Hide()
 
+        -- Odpočítavanie zostávajúceho času aktívneho buffu (Salva/MD/ToT)
+        btn.buffTimer = btn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+        btn.buffTimer:SetPoint("BOTTOMRIGHT", -2, 3)
+        btn.buffTimer:SetShadowColor(0, 0, 0, 1)
+        btn.buffTimer:SetShadowOffset(1, -1)
+        btn.buffTimer:Hide()
+
         -- Čistý pulzujúci overlay efekt pre príkaz
         btn.pingHighlight = btn:CreateTexture(nil, "OVERLAY", nil, 7)
         btn.pingHighlight:SetTexture("Interface\\Buttons\\CheckButtonHilight")
@@ -749,7 +839,7 @@ local function CreateGridButtons()
                     SausageThreatDB.assignedRoles[uName] = newRole
                     SendComm("SET_ROLE:"..uName..":"..newRole)
                     if not InCombatLockdown() then SausageThreatMainFrame_UpdateGrid() end
-                    print("|cFF00CCFF[SausageThreat]|r Role pre " .. uName .. " zmenená na " .. newRole)
+                    print("|cFF00CCFF[SausageThreat]|r Role for " .. uName .. " changed to " .. newRole)
                 end
                 return
             end
@@ -778,8 +868,29 @@ local function CreateGridButtons()
             if button == "LeftButton" then local targetName = self.unitName or UnitName(self.targetUnit); if targetName then SendComm("PRE_CAST:"..targetName); focusTarget, focusTargetClass = nil, nil end end
         end)
         
+        -- Zabráni ElvUI FrameGlow systému spracovávať naše buttony ako unit framy
+        btn.noMouseoverHighlight = true
+
         btn:Hide(); unitButtons[i] = btn
     end
+end
+
+-- Rozlíšenie zdroja threatu: zamknutý target má prednosť pred aktuálnym targetom
+local function ResolveThreatSource()
+    if lockedThreatGUID then
+        -- Skontroluj boss framy (najčastejší prípad v raidoch)
+        for i = 1, 4 do
+            local u = "boss" .. i
+            if UnitExists(u) and UnitGUID(u) == lockedThreatGUID then return u end
+        end
+        -- Záloha: aktuálny target alebo targettarget
+        if UnitExists("target") and UnitGUID("target") == lockedThreatGUID then return "target" end
+        if UnitExists("targettarget") and UnitGUID("targettarget") == lockedThreatGUID then return "targettarget" end
+        -- Boss nie je viditeľný (mŕtvy, fázovaný) - vráť nil
+        return nil
+    end
+    -- Štandardné správanie bez zámku
+    return UnitExists("target") and "target" or (UnitExists("targettarget") and "targettarget" or nil)
 end
 
 UpdateCombatGrid = function(dt)
@@ -788,6 +899,15 @@ UpdateCombatGrid = function(dt)
     local pulse = (math.sin(GetTime() * 5) + 1) / 2
     local inFocusMode = (focusTarget ~= nil and focusTimer > 0)
     if focusTimer > 0 then focusTimer = focusTimer - dt else focusTargetClass = nil end
+
+    -- Periodická aktualizácia CoordFrame odpočítavania cooldownov (každú 1s)
+    if CoordFrame:IsShown() then
+        coordRefreshTimer = coordRefreshTimer + dt
+        if coordRefreshTimer >= 1 then
+            coordRefreshTimer = 0
+            SortPaladins()
+        end
+    end
 
     for i = 1, 40 do
         local btn = unitButtons[i]
@@ -824,8 +944,8 @@ UpdateCombatGrid = function(dt)
                 if isTestMode then
                     threatPct = (i * 7) % 135
                 elseif unit and UnitExists(unit) then
-                    -- Použi "target" ak existuje, inak "targettarget" ako záloha
-                    local threatSource = UnitExists("target") and "target" or (UnitExists("targettarget") and "targettarget" or nil)
+                    -- Použi zamknutý target (ak existuje), inak fallback na aktuálny target
+                    local threatSource = ResolveThreatSource()
                     if threatSource then
                         local _, _, pct = UnitDetailedThreatSituation(unit, threatSource)
                         threatPct = pct or 0
@@ -847,8 +967,8 @@ UpdateCombatGrid = function(dt)
                         btn.roleIcon:Hide()
                     end
 
-                    local threshold = 90
-            if not isTestMode and unit then local _, class = UnitClass(unit); threshold = (class == "MAGE" or class == "WARLOCK" or class == "PRIEST") and 110 or 90 end
+                    local threshold = (SausageThreatDB and SausageThreatDB.threatThresholdMelee) or 90
+            if not isTestMode and unit then local _, class = UnitClass(unit); threshold = (class == "MAGE" or class == "WARLOCK" or class == "PRIEST") and ((SausageThreatDB and SausageThreatDB.threatThresholdCaster) or 110) or threshold end
             
             local hasSalva, activeIcon, buffType = false, nil, nil
             local now = GetTime()
@@ -880,6 +1000,25 @@ UpdateCombatGrid = function(dt)
                 elseif t then hasSalva = true; activeIcon = iconT; buffType = "ROGUE" end
             end
             if activeIcon then btn.icon:SetTexture(activeIcon); btn.icon:Show() else btn.icon:Hide() end
+
+            -- Zobrazenie odpočítavania zostávajúceho času buffu
+            local buffExpiry = unitName and activeBuffsOnTarget[unitName] and activeBuffsOnTarget[unitName][buffType] and activeBuffsOnTarget[unitName][buffType].expiry
+            if hasSalva and buffExpiry then
+                local remaining = math.ceil(buffExpiry - now)
+                if remaining > 0 then
+                    btn.buffTimer:SetText(remaining .. "s")
+                    if remaining <= 3 then
+                        btn.buffTimer:SetTextColor(1, 0.2, 0.2, 1)
+                    else
+                        btn.buffTimer:SetTextColor(1, 1, 1, 1)
+                    end
+                    btn.buffTimer:Show()
+                else
+                    btn.buffTimer:Hide()
+                end
+            else
+                btn.buffTimer:Hide()
+            end
 
             -- Vyhodnotenie farieb pre PING pulz
             if inFocusMode then
@@ -1044,7 +1183,7 @@ end)
 
 -- [[ NASTAVENIA (SETTINGS FRAME) ]]
 local SettingsFrame = CreateFrame("Frame", "SausageThreatSettings", UIParent)
-SettingsFrame:SetSize(480, 580)
+SettingsFrame:SetSize(480, 650)
 SettingsFrame:SetPoint("CENTER")
 SettingsFrame:SetFrameStrata("DIALOG")
 SettingsFrame:SetMovable(true)
@@ -1231,6 +1370,14 @@ local cbHideBackground = CreateCB("BG", "Hide Main BG", -180, "hideBackground")
 
 local sldLockout = CreateGridSlider("Lockout", "Cmd Debounce Lockout (s)", 1, 10, col2X, -250, "cmdLockout")
 
+-- Prahové hodnoty threatu - vlastná sekcia dole cez celú šírku (oddelená od ostatných kontroliek)
+local threshSep = generalPanel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+threshSep:SetPoint("TOPLEFT", 20, -410)
+threshSep:SetText("Alert Thresholds:")
+
+local sldThreshMelee = CreateGridSlider("ThreshMelee", "Threat Alert % (Melee)", 70, 130, 20, -435, "threatThresholdMelee")
+local sldThreshCaster = CreateGridSlider("ThreshCaster", "Threat Alert % (Caster)", 70, 130, 255, -435, "threatThresholdCaster")
+
 local anchorLabel = generalPanel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
 anchorLabel:SetPoint("TOPLEFT", 20, -260); anchorLabel:SetText("Growth Direction (Anchor):")
 
@@ -1410,6 +1557,8 @@ function SettingsFrame.RefreshUI()
         cbAutoHide:SetChecked(SausageThreatDB.autoHide)
         sldCols:SetValue(SausageThreatDB.cols); sldWidth:SetValue(SausageThreatDB.btnWidth); sldHeight:SetValue(SausageThreatDB.btnHeight); sldSpacing:SetValue(SausageThreatDB.spacing)
         sldLockout:SetValue(SausageThreatDB.cmdLockout or 3)
+        sldThreshMelee:SetValue(SausageThreatDB.threatThresholdMelee or 90)
+        sldThreshCaster:SetValue(SausageThreatDB.threatThresholdCaster or 110)
         cbHideBorder:SetChecked(SausageThreatDB.hideBorder); cbHideHeader:SetChecked(SausageThreatDB.hideHeader); cbHideNames:SetChecked(SausageThreatDB.hideNames); cbHideThreat:SetChecked(SausageThreatDB.hideThreat); cbHideBackground:SetChecked(SausageThreatDB.hideBackground)
         cbEnableSound:SetChecked(SausageThreatDB.enableSound)
         SausageThreatSettings_cbBossOnlyAlert_Update()
@@ -1542,6 +1691,7 @@ EventFrame:RegisterEvent("CHAT_MSG_ADDON")
 EventFrame:RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
 EventFrame:RegisterEvent("SPELL_UPDATE_COOLDOWN")
 EventFrame:RegisterEvent("UNIT_AURA")
+EventFrame:RegisterEvent("PLAYER_TALENT_UPDATE")
 
 EventFrame:SetScript("OnEvent", function(self, event, ...)
     if event == "UNIT_AURA" then
@@ -1551,7 +1701,7 @@ EventFrame:SetScript("OnEvent", function(self, event, ...)
             if name and duration and duration <= 6 then
                 CancelUnitBuff("player", TRICKS_NAME)
                 totTargetIsDPS = false
-                print("|cFF00CCFF[SausageThreat]|r Auto-canceled ToT Threat Transfer on DPS target!")
+                print("|cFF00CCFF[SausageThreat]|r Auto-canceled Tricks of the Trade on DPS target!")
             end
         end
     elseif event == "ADDON_LOADED" then
@@ -1571,6 +1721,25 @@ EventFrame:SetScript("OnEvent", function(self, event, ...)
             MainFrame:ClearAllPoints(); CreateGridButtons()
             if SausageThreatDB.isShown == false or SausageThreatDB.autoHide then MainFrame:Hide() else MainFrame:Show() end
             SausageThreatMainFrame_UpdateGrid()
+            UpdateLockBtnVisibility()
+
+            -- Obnovenie uloženej pozície CoordFrame
+            if SausageThreatDB.coordFrameX and SausageThreatDB.coordFrameY then
+                CoordFrame:ClearAllPoints()
+                CoordFrame:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", SausageThreatDB.coordFrameX, SausageThreatDB.coordFrameY)
+            end
+
+            -- Záchranná sieť: ElvUI FrameGlow guard pre prípad, že noMouseoverHighlight nestačí
+            -- Ak je funkcia globálna, obalíme ju kontrolou na colors, aby nehavarovala na custom framoch
+            After(0, function()
+                if _G["FrameGlow_CheckMouseover"] then
+                    local _origFGC = _G["FrameGlow_CheckMouseover"]
+                    _G["FrameGlow_CheckMouseover"] = function(self, ...)
+                        if not self or not self.colors then return end
+                        return _origFGC(self, ...)
+                    end
+                end
+            end)
             
             -- WotLK safe timer pre načítanie talentov
             local delayFrame = CreateFrame("Frame")
@@ -1598,12 +1767,17 @@ EventFrame:SetScript("OnEvent", function(self, event, ...)
         if IsInRaid() and (IsRaidLeader() or IsRaidOfficer()) or isTestMode then CoordFrame:Show() else CoordFrame:Hide() end
         local changed = false; for i = #activePaladins, 1, -1 do if not UnitInRaid(activePaladins[i].name) and not UnitInParty(activePaladins[i].name) then table.remove(activePaladins, i); changed = true end end
         SortPaladins(); SausageThreatMainFrame_UpdateGrid(); if SettingsFrame:IsShown() then UpdateIgnoreScrollFrame() end; BroadcastStatus()
+        UpdateLockBtnVisibility()
         if event == "PLAYER_ENTERING_WORLD" and not (IsRaidLeader() or IsRaidOfficer()) then SendComm("REQ_IGNORE") end
     elseif event == "PLAYER_REGEN_DISABLED" then
 
         inCombat = true; if SausageThreatDB and SausageThreatDB.autoHide then MainFrame:Show() end
     elseif event == "PLAYER_REGEN_ENABLED" then
-        inCombat = false; focusTarget, focusTargetClass = nil, nil; if SausageThreatDB and SausageThreatDB.autoHide then MainFrame:Hide() end; SausageThreatMainFrame_UpdateGrid() 
+        inCombat = false; focusTarget, focusTargetClass = nil, nil; if SausageThreatDB and SausageThreatDB.autoHide then MainFrame:Hide() end; SausageThreatMainFrame_UpdateGrid()
+        -- Automatické uvoľnenie zámku po skončení boja
+        lockedThreatGUID = nil
+        lockedThreatName = nil
+        lockBtn:SetText("Lock Target")
         UpdateAddonIdentity() -- Poistenie synchronizácie atribútov po boji
     elseif event == "SPELL_UPDATE_COOLDOWN" then
         BroadcastStatus()
@@ -1614,7 +1788,7 @@ EventFrame:SetScript("OnEvent", function(self, event, ...)
             local cmd = args[1]
 
             if cmd == "CHECK" then SendComm("VERSION:"..SAUSAGE_VERSION)
-            elseif cmd == "VERSION" then print("|cFFFFFF00[SausageThreat]|r " .. sender .. " má verziu " .. args[2])
+            elseif cmd == "VERSION" then print("|cFFFFFF00[SausageThreat]|r " .. sender .. " is running version " .. args[2])
             elseif cmd == "MY_ROLE" then
                 SausageThreatDB.assignedRoles = SausageThreatDB.assignedRoles or {}
                 SausageThreatDB.assignedRoles[sender] = args[2]
@@ -1659,8 +1833,18 @@ EventFrame:SetScript("OnEvent", function(self, event, ...)
                 end
             elseif cmd == "ANNOUNCE" then
                 if sender == UnitName("player") then return end
+                -- Odstráň existujúci záznam pre tohto hráča
                 for i = #activePaladins, 1, -1 do if activePaladins[i].name == sender then table.remove(activePaladins, i) end end
-                if tonumber(args[3]) == 1 then activePaladins[#activePaladins + 1] = {name = sender, spec = tonumber(args[2])} end
+                local isReadyBool = tonumber(args[3]) == 1
+                local cdRemaining = tonumber(args[4]) or 0
+                local cooldownEnd = (not isReadyBool and cdRemaining > 0) and (GetTime() + cdRemaining) or nil
+                -- Vždy pridaj do zoznamu (aj keď je na cooldowne - zobrazíme odpočítavanie)
+                activePaladins[#activePaladins + 1] = {
+                    name = sender,
+                    spec = tonumber(args[2]),
+                    isReady = isReadyBool,
+                    cooldownEnd = cooldownEnd
+                }
                 SortPaladins()
             elseif cmd == "PRE_CAST" then -- Vizuálne zmeny iba
             elseif cmd == "PING_CAST" then
