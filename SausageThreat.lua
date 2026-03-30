@@ -4,7 +4,30 @@
 -- ============================================================================
 
 local addonName, addonTable = ...
-local SAUSAGE_VERSION = "Beta 0.9" -- SEM SCRIPT DOPLNI VERZIU PODLA TAGU
+local SAUSAGE_VERSION = "Beta 0.9" 
+
+-- 1. LOCAL ALIASES (Appendix A, p. 1310) for peak performance
+local _G = _G
+local CreateFrame = _G.CreateFrame
+local UIParent = _G.UIParent
+local Minimap = _G.Minimap
+local GetSpellInfo = _G.GetSpellInfo
+local GetTime = _G.GetTime
+local InCombatLockdown = _G.InCombatLockdown
+local IsShiftKeyDown = _G.IsShiftKeyDown
+local select = _G.select
+local pairs = _G.pairs
+local ipairs = _G.ipairs
+local strfind = _G.string.find
+local math_rad = _G.math.rad
+local math_cos = _G.math.cos
+local math_sin = _G.math.sin
+local math_deg = _G.math.deg
+local math_atan2 = _G.math.atan2
+local GetCursorPosition = _G.GetCursorPosition
+local tinsert = _G.tinsert or _G.table.insert
+local UISpecialFrames = _G.UISpecialFrames
+
 local PREFIX = "STHREAT"
 local SALVA_SPELL_ID = 1038 -- Hand of Salvation
 local MISDIRECT_SPELL_ID = 34477 -- Misdirection
@@ -74,6 +97,20 @@ local isPaladin, isHunter, isRogue, isCoordClass
 local mySpellName, mySoundPath
 
 -- [[ UTILITY FUNKCIE ]]
+-- Utility: After (Bible-style delay for WotLK)
+local function After(delay, func)
+    local f = CreateFrame("Frame")
+    f.t = 0
+    f:SetScript("OnUpdate", function(self, elapsed)
+        self.t = self.t + elapsed
+        if self.t >= delay then
+            self:SetScript("OnUpdate", nil)
+            func()
+            self:Hide() -- Cleanup
+        end
+    end)
+end
+
 local function UpdateAddonIdentity()
     local currentClass = debugClass or playerClassOrig
     isPaladin = (currentClass == "PALADIN")
@@ -307,13 +344,12 @@ MainFrame:SetScript("OnShow", function()
 end)
 
 MainFrame:SetBackdrop({
-    bgFile = "Interface\\ChatFrame\\ChatFrameBackground",
-    edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-    tile = true, tileSize = 16, edgeSize = 14,
-    insets = { left = 3, right = 3, top = 3, bottom = 3 }
+    bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
+    edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
+    tile = true, tileSize = 32, edgeSize = 32,
+    insets = { left = 11, right = 12, top = 12, bottom = 11 }
 })
-MainFrame:SetBackdropColor(0.05, 0.05, 0.05, 0.95)
-MainFrame:SetBackdropBorderColor(1, 0.6, 0, 1) -- Sausage Party Orange
+MainFrame:SetBackdropColor(1, 1, 1, 1)
 
 local header = MainFrame:CreateTexture(nil, "OVERLAY")
 header:SetTexture("Interface\\DialogFrame\\UI-DialogBox-Header")
@@ -337,8 +373,13 @@ CoordFrame:EnableMouse(true)
 CoordFrame:RegisterForDrag("LeftButton")
 CoordFrame:SetScript("OnDragStart", CoordFrame.StartMoving)
 CoordFrame:SetScript("OnDragStop", function(self) self:StopMovingOrSizing() end)
-CoordFrame:SetBackdrop({ bgFile="Interface\\ChatFrame\\ChatFrameBackground", edgeFile="Interface\\Tooltips\\UI-Tooltip-Border", tile=true, tileSize=16, edgeSize=12, insets={left=3,right=3,top=3,bottom=3} })
-CoordFrame:SetBackdropColor(0.05, 0.05, 0.05, 0.95)
+CoordFrame:SetBackdrop({ 
+    bgFile="Interface\\Tooltips\\UI-Tooltip-Background", 
+    edgeFile="Interface\\Tooltips\\UI-Tooltip-Border", 
+    tile=true, tileSize=16, edgeSize=12, 
+    insets={left=3,right=3,top=3,bottom=3} 
+})
+CoordFrame:SetBackdropColor(0.1, 0.1, 0.1, 0.8)
 CoordFrame:SetBackdropBorderColor(1, 0.6, 0, 0.5)
 CoordFrame:Hide()
 
@@ -477,70 +518,6 @@ HandleRadialClick = function(targetClass, overrideTargetName)
     RadialMenu:Hide()
 end
 
-local function CreateMinimapButton()
-    local btn = CreateFrame("Button", "SausageThreatMinimapBtn", Minimap)
-    btn:SetSize(31, 31); btn:SetFrameStrata("MEDIUM"); btn:SetFrameLevel(8)
-    btn:RegisterForClicks("LeftButtonUp", "RightButtonUp")
-    btn:RegisterForDrag("LeftButton")
-    
-    local icon = btn:CreateTexture(nil, "BACKGROUND")
-    icon:SetTexture("Interface\\Icons\\Ability_Paladin_Salvation")
-    icon:SetSize(20, 20); icon:SetPoint("CENTER")
-    
-    local border = btn:CreateTexture(nil, "OVERLAY")
-    border:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder")
-    border:SetSize(52, 52); border:SetPoint("TOPLEFT")
-    border:SetVertexColor(1, 0.6, 0) -- Sausage Party Orange
-    
-    local badge = btn:CreateTexture(nil, "OVERLAY")
-    badge:SetTexture("Interface\\Icons\\Inv_Misc_Food_53")
-    badge:SetSize(12, 12); badge:SetPoint("BOTTOMRIGHT", -2, 2)
-    
-    btn:SetHighlightTexture("Interface\\Minimap\\UI-Minimap-ZoomButton-Highlight")
-
-    local function UpdatePosition()
-        local angle = math.rad(SausageThreatDB.minimapPos or 180)
-        local x, y = math.cos(angle) * 80, math.sin(angle) * 80
-        btn:SetPoint("CENTER", Minimap, "CENTER", x, y)
-    end
-
-    btn:SetScript("OnClick", function(self, button)
-        if button == "LeftButton" then
-            if MainFrame:IsShown() then MainFrame:Hide() else MainFrame:Show() end
-        elseif button == "RightButton" then
-            isTestMode = not isTestMode
-            SausageThreatMainFrame_UpdateGrid()
-            print("|cffff8800Sausage|r Threat: Test Mode " .. (isTestMode and "|cff00ff00ON|r" or "|cffff0000OFF|r"))
-        end
-    end)
-
-    btn:SetScript("OnDragStart", function(self)
-        self:LockHighlight()
-        self:SetScript("OnUpdate", function()
-            local xpos, ypos = GetCursorPosition()
-            local xmin, ymin = Minimap:GetLeft(), Minimap:GetBottom()
-            local scale = Minimap:GetEffectiveScale()
-            xpos, ypos = (xpos / scale) - xmin - 70, (ypos / scale) - ymin - 70
-            local angle = math.deg(math.atan2(ypos, xpos))
-            if angle < 0 then angle = angle + 360 end
-            SausageThreatDB.minimapPos = angle
-            UpdatePosition()
-        end)
-    end)
-    btn:SetScript("OnDragStop", function(self) self:UnlockHighlight(); self:SetScript("OnUpdate", nil) end)
-
-    btn:SetScript("OnEnter", function(self)
-        GameTooltip:SetOwner(self, "ANCHOR_LEFT")
-        GameTooltip:AddLine("|cffff8800Sausage|r Threat", 1, 1, 1)
-        GameTooltip:AddLine("|cffff8800Sausage Party Member|r")
-        GameTooltip:AddLine("Left Click: Toggle Main Window", 1, 0.8, 0)
-        GameTooltip:AddLine("Right Click: Toggle Test Mode", 1, 0.8, 0)
-        GameTooltip:Show()
-    end)
-    btn:SetScript("OnLeave", GameTooltip_Hide)
-
-    UpdatePosition()
-end
 
 RadialMenu:SetScript("OnUpdate", function(self)
     if not self:IsShown() then return end
@@ -598,14 +575,17 @@ SausageThreatMainFrame_UpdateGrid = function()
     local spacing = SausageThreatDB.spacing
 
     if SausageThreatDB.hideBorder then
-        MainFrame:SetBackdrop({ bgFile="Interface\\DialogFrame\\UI-DialogBox-Background", edgeFile=nil, tile=true, tileSize=16, edgeSize=0, insets={left=3,right=3,top=3,bottom=3} })
-        MainFrame:SetBackdropBorderColor(0, 0, 0, 0)
+        MainFrame:SetBackdrop({ bgFile="Interface\\ChatFrame\\ChatFrameBackground", edgeFile=nil, tile=true, tileSize=16, edgeSize=0, insets={left=3,right=3,top=3,bottom=3} })
     else
-        MainFrame:SetBackdrop({ bgFile="Interface\\DialogFrame\\UI-DialogBox-Background", edgeFile="Interface\\Tooltips\\UI-Tooltip-Border", tile=true, tileSize=16, edgeSize=12, insets={left=3,right=3,top=3,bottom=3} })
-        MainFrame:SetBackdropBorderColor(1, 1, 1, 1)
+        MainFrame:SetBackdrop({
+            bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
+            edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
+            tile = true, tileSize = 32, edgeSize = 32,
+            insets = { left = 11, right = 12, top = 12, bottom = 11 }
+        })
     end
 
-    if SausageThreatDB.hideBackground then MainFrame:SetBackdropColor(0,0,0,0) else MainFrame:SetBackdropColor(0.05, 0.05, 0.05, 0.95) end
+    if SausageThreatDB.hideBackground then MainFrame:SetBackdropColor(0,0,0,0) else MainFrame:SetBackdropColor(1, 1, 1, 1) end
     if SausageThreatDB.hideHeader then header:Hide(); title:Hide() else header:Show(); title:Show() end
 
     ContentFrame:ClearAllPoints()
@@ -776,8 +756,8 @@ local function CreateGridButtons()
 
             if button == "RightButton" then
                 if IsRaidLeader() or IsRaidOfficer() or not IsInRaid() then
-                    local targetName = UnitName(self.targetUnit)
-                    local _, targetClass = UnitClass(self.targetUnit)
+                    local targetName = self.unitName or UnitName(self.targetUnit)
+                    local targetClass = isTestMode and "WARRIOR" or select(2, UnitClass(self.targetUnit))
                     if targetName then
                         RadialMenu.targetName = targetName
                         RadialMenu.currentHoveredClass = nil
@@ -795,7 +775,7 @@ local function CreateGridButtons()
         end)
 
         btn:HookScript("OnClick", function(self, button)
-            if button == "LeftButton" then local targetName = UnitName(self.targetUnit); if targetName then SendComm("PRE_CAST:"..targetName); focusTarget, focusTargetClass = nil, nil end end
+            if button == "LeftButton" then local targetName = self.unitName or UnitName(self.targetUnit); if targetName then SendComm("PRE_CAST:"..targetName); focusTarget, focusTargetClass = nil, nil end end
         end)
         
         btn:Hide(); unitButtons[i] = btn
@@ -841,7 +821,16 @@ UpdateCombatGrid = function(dt)
                 if inRange == 0 then btn:SetAlpha(0.4) else btn:SetAlpha(1.0) end
 
                 local threatPct = 0
-                if isTestMode then threatPct = (i * 7) % 135 elseif unit and UnitExists(unit) then local _, _, pct = UnitDetailedThreatSituation(unit, "target"); threatPct = pct or 0 end
+                if isTestMode then
+                    threatPct = (i * 7) % 135
+                elseif unit and UnitExists(unit) then
+                    -- Použi "target" ak existuje, inak "targettarget" ako záloha
+                    local threatSource = UnitExists("target") and "target" or (UnitExists("targettarget") and "targettarget" or nil)
+                    if threatSource then
+                        local _, _, pct = UnitDetailedThreatSituation(unit, threatSource)
+                        threatPct = pct or 0
+                    end
+                end
                 btn.threatText:SetText(string.format("%d%%", threatPct))
 
                 local role = GetUnitRoleFromName(unitName)
@@ -860,7 +849,6 @@ UpdateCombatGrid = function(dt)
 
                     local threshold = 90
             if not isTestMode and unit then local _, class = UnitClass(unit); threshold = (class == "MAGE" or class == "WARLOCK" or class == "PRIEST") and 110 or 90 end
-            local isTestFocus = isTestMode and (i == 5)
             
             local hasSalva, activeIcon, buffType = false, nil, nil
             local now = GetTime()
@@ -894,8 +882,8 @@ UpdateCombatGrid = function(dt)
             if activeIcon then btn.icon:SetTexture(activeIcon); btn.icon:Show() else btn.icon:Hide() end
 
             -- Vyhodnotenie farieb pre PING pulz
-            if inFocusMode or isTestFocus then
-                local isThisFocus = (isTestMode and isTestFocus) or (not isTestMode and unitName and focusTarget and string.lower(unitName) == string.lower(focusTarget))
+            if inFocusMode then
+                local isThisFocus = (unitName and focusTarget and string.lower(unitName) == string.lower(focusTarget))
                 if isThisFocus then
                     local colorKey = focusTargetClass
                     if isTestMode then
@@ -1016,13 +1004,14 @@ end
 local GitFrame = CreateFrame("Frame", "SausageThreatGitFrame", UIParent)
 GitFrame:SetSize(320, 130)
 GitFrame:SetPoint("CENTER")
-GitFrame:SetFrameStrata("DIALOG")
+GitFrame:SetFrameStrata("TOOLTIP")
 GitFrame:SetBackdrop({
     bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
     edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
     tile = true, tileSize = 32, edgeSize = 32,
     insets = { left = 11, right = 12, top = 12, bottom = 11 }
 })
+GitFrame:SetBackdropColor(1, 1, 1, 1)
 tinsert(UISpecialFrames, "SausageThreatGitFrame")
 GitFrame:Hide()
 
@@ -1048,7 +1037,10 @@ gitEditBox:SetScript("OnTextChanged", function(self)
     if self:GetText() ~= GITHUB_LINK then self:SetText(GITHUB_LINK); self:HighlightText() end
 end)
 gitEditBox:SetScript("OnEscapePressed", function(self) self:ClearFocus(); GitFrame:Hide() end)
-GitFrame:SetScript("OnShow", function() gitEditBox:SetText(GITHUB_LINK); gitEditBox:SetFocus(); gitEditBox:HighlightText() end)
+GitFrame:SetScript("OnShow", function() 
+    GitFrame:Raise()
+    gitEditBox:SetText(GITHUB_LINK); gitEditBox:SetFocus(); gitEditBox:HighlightText() 
+end)
 
 -- [[ NASTAVENIA (SETTINGS FRAME) ]]
 local SettingsFrame = CreateFrame("Frame", "SausageThreatSettings", UIParent)
@@ -1061,12 +1053,12 @@ SettingsFrame:RegisterForDrag("LeftButton")
 SettingsFrame:SetScript("OnDragStart", SettingsFrame.StartMoving)
 SettingsFrame:SetScript("OnDragStop", SettingsFrame.StopMovingOrSizing)
 SettingsFrame:SetBackdrop({
-    bgFile = "Interface\\ChatFrame\\ChatFrameBackground",
-    edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-    tile = true, tileSize = 16, edgeSize = 12,
-    insets = { left = 3, right = 3, top = 3, bottom = 3 }
+    bgFile = "Interface\\DialogFrame\\UI-DialogBox-Background",
+    edgeFile = "Interface\\DialogFrame\\UI-DialogBox-Border",
+    tile = true, tileSize = 32, edgeSize = 32,
+    insets = { left = 11, right = 12, top = 12, bottom = 11 }
 })
-SettingsFrame:SetBackdropColor(0, 0, 0, 0.9)
+SettingsFrame:SetBackdropColor(1, 1, 1, 1)
 tinsert(UISpecialFrames, "SausageThreatSettings")
 SettingsFrame:Hide()
 
@@ -1076,33 +1068,46 @@ setHeader:SetSize(256, 64)
 setHeader:SetPoint("TOP", 0, 12)
 local setTitle = SettingsFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
 setTitle:SetPoint("TOP", setHeader, "TOP", 0, -14)
-setTitle:SetText("Settings")
+setTitle:SetText("|cffff8800Sausage|r Threat")
 local setClose = CreateFrame("Button", nil, SettingsFrame, "UIPanelCloseButton")
 setClose:SetPoint("TOPRIGHT", -8, -8)
 
 local panelContainer = CreateFrame("Frame", nil, SettingsFrame)
 panelContainer:SetPoint("TOPLEFT", 0, -65)
 panelContainer:SetPoint("BOTTOMRIGHT", 0, 75)
+panelContainer:SetFrameLevel(SettingsFrame:GetFrameLevel() + 5)
 local generalPanel = CreateFrame("Frame", nil, panelContainer); generalPanel:SetAllPoints()
 local listPanel = CreateFrame("Frame", nil, panelContainer); listPanel:SetAllPoints()
 
-local function CreateTab(id, text, x, width)
-    local btn = CreateFrame("Button", "SausageThreatTab"..id, SettingsFrame, "UIPanelButtonTemplate")
-    btn:SetSize(width or 80, 25)
-    btn:SetPoint("TOPLEFT", x, -35)
+PanelTemplates_SetNumTabs(SettingsFrame, 5)
+
+local function CreateTab(id, text, prevTab)
+    local tabName = SettingsFrame:GetName() .. "Tab" .. id
+    local btn = CreateFrame("Button", tabName, SettingsFrame, "CharacterFrameTabButtonTemplate")
+    btn:SetID(id)
     btn:SetText(text)
+    if prevTab then
+        btn:SetPoint("LEFT", prevTab, "RIGHT", -15, 0)
+    else
+        btn:SetPoint("BOTTOMLEFT", 15, -28)
+    end
+    _G[btn:GetName()] = btn
+
     btn:SetScript("OnClick", function()
         currentTab = id
-        for i=1, 5 do 
-            local b = _G["SausageThreatTab"..i]
-            if b then if i == id then b:SetAlpha(1.0) else b:SetAlpha(0.6) end end
-        end
+        PanelTemplates_SetTab(SettingsFrame, id)
         SettingsFrame.RefreshUI()
     end)
     return btn
 end
 
-CreateTab(1, "General", 20, 80); CreateTab(2, "Paladins", 105, 80); CreateTab(3, "Hunters", 190, 80); CreateTab(4, "Rogues", 275, 80); CreateTab(5, "RL/RA View", 360, 85)
+local tab1 = CreateTab(1, "General", nil)
+local tab2 = CreateTab(2, "Paladins", tab1)
+local tab3 = CreateTab(3, "Hunters", tab2)
+local tab4 = CreateTab(4, "Rogues", tab3)
+local tab5 = CreateTab(5, "RL View", tab4)
+
+PanelTemplates_SetTab(SettingsFrame, 1)
 
 local ignoreLabel = listPanel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
 ignoreLabel:SetPoint("TOPLEFT", 15, -5); ignoreLabel:SetText("Players Visibility (Show List)")
@@ -1118,28 +1123,37 @@ local btnHideAll = CreateFrame("Button", nil, listPanel, "UIPanelButtonTemplate"
 local function UpdateSettingsTabsVisibility()
     local isSpecial = IsRaidLeader() or IsRaidOfficer()
     local inRaid = IsInRaid()
-    local tabs = { SausageThreatTab1, SausageThreatTab2, SausageThreatTab3, SausageThreatTab4, SausageThreatTab5 }
+    local tabs = { 
+        _G[SettingsFrame:GetName() .. "Tab1"], 
+        _G[SettingsFrame:GetName() .. "Tab2"], 
+        _G[SettingsFrame:GetName() .. "Tab3"], 
+        _G[SettingsFrame:GetName() .. "Tab4"], 
+        _G[SettingsFrame:GetName() .. "Tab5"] 
+    }
     local showTab = {true, false, false, false, false}
     
     if isSpecial then
         showTab[2], showTab[3], showTab[4], showTab[5] = true, true, true, true
-        tabs[2]:SetText("Paladins"); tabs[3]:SetText("Hunters")
-        tabs[4]:SetText("Rogues"); tabs[5]:SetText("RL/RA View")
     else
-        if isPaladin then showTab[2] = true; tabs[2]:SetText("Grid View") end
-        if isHunter then showTab[3] = true; tabs[3]:SetText("Grid View") end
-        if isRogue then showTab[4] = true; tabs[4]:SetText("Grid View") end
+        if isPaladin then showTab[2] = true end
+        if isHunter then showTab[3] = true end
+        if isRogue then showTab[4] = true end
         if not (isPaladin or isHunter or isRogue) then
-            showTab[5] = true; tabs[5]:SetText("Grid View")
+            showTab[5] = true
         end
     end
     
-    local xOffset = 20
+    local prevTab = nil
     for i = 1, 5 do
         if showTab[i] then
-            tabs[i]:SetPoint("TOPLEFT", xOffset, -35)
+            tabs[i]:ClearAllPoints()
+            if prevTab then
+                tabs[i]:SetPoint("LEFT", prevTab, "RIGHT", -15, 0)
+            else
+                tabs[i]:SetPoint("BOTTOMLEFT", 15, -28)
+            end
             tabs[i]:Show()
-            xOffset = xOffset + 85
+            prevTab = tabs[i]
         else
             tabs[i]:Hide()
         end
@@ -1147,10 +1161,8 @@ local function UpdateSettingsTabsVisibility()
     
     if not showTab[currentTab] then
         currentTab = 1
-        for i=1, 5 do 
-            if tabs[i] then if i == currentTab then tabs[i]:SetAlpha(1.0) else tabs[i]:SetAlpha(0.6) end end
-        end
     end
+    PanelTemplates_SetTab(SettingsFrame, currentTab)
 
     if inRaid and not isSpecial then
         SausageThreatSettings_ReadOnlyLabel:Show()
@@ -1262,8 +1274,13 @@ btnHideAll:SetScript("OnClick", function() MassSyncCheck(false) end)
 
 local rosterFrame = CreateFrame("Frame", nil, listPanel)
 rosterFrame:SetSize(410, 330); rosterFrame:SetPoint("TOPLEFT", 15, -25)
-rosterFrame:SetBackdrop({ bgFile="Interface\\ChatFrame\\ChatFrameBackground", edgeFile="Interface\\Tooltips\\UI-Tooltip-Border", tile=true, tileSize=16, edgeSize=12, insets={left=3,right=3,top=3,bottom=3} })
-rosterFrame:SetBackdropColor(0,0,0,0.8)
+rosterFrame:SetBackdrop({ 
+    bgFile="Interface\\Tooltips\\UI-Tooltip-Background", 
+    edgeFile="Interface\\Tooltips\\UI-Tooltip-Border", 
+    tile=true, tileSize=16, edgeSize=12, 
+    insets={left=3,right=3,top=3,bottom=3} 
+})
+rosterFrame:SetBackdropColor(0.1, 0.1, 0.1, 0.8)
 
 local ignoreListScroll = CreateFrame("ScrollFrame", "SausageThreatIgnoreScroll", rosterFrame, "FauxScrollFrameTemplate")
 ignoreListScroll:SetPoint("TOPLEFT", 5, -5); ignoreListScroll:SetPoint("BOTTOMRIGHT", -25, 5)
@@ -1338,11 +1355,11 @@ refreshBtn:SetSize(100, 25); refreshBtn:SetPoint("LEFT", btnTestGrid, "RIGHT", 5
 refreshBtn:SetScript("OnClick", function() if not InCombatLockdown() then SausageThreatMainFrame_UpdateGrid(); UpdateIgnoreScrollFrame(); BroadcastStatus() end end)
 
 local updateBtn = CreateFrame("Button", nil, footerFrame, "UIPanelButtonTemplate")
-updateBtn:SetSize(110, 25); updateBtn:SetPoint("LEFT", refreshBtn, "RIGHT", 5, 0); updateBtn:SetText("Check Updates")
+updateBtn:SetSize(110, 25); updateBtn:SetPoint("BOTTOMRIGHT", -20, 15); updateBtn:SetText("Check Updates")
 updateBtn:SetScript("OnClick", function() GitFrame:Show() end)
 
 local lblVersion = footerFrame:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-lblVersion:SetPoint("BOTTOMRIGHT", -20, 15); lblVersion:SetText(SAUSAGE_VERSION)
+lblVersion:SetPoint("BOTTOMLEFT", 20, 15); lblVersion:SetText("v " .. SAUSAGE_VERSION)
 local lblCredits = footerFrame:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
 lblCredits:SetPoint("BOTTOM", footerFrame, "BOTTOM", 0, 15); lblCredits:SetText("by Sausage Party")
 
@@ -1400,11 +1417,17 @@ function SettingsFrame.RefreshUI()
         generalPanel:Hide(); listPanel:Show(); UpdateIgnoreScrollFrame()
     end
 end
-SettingsFrame:SetScript("OnShow", function() if SausageThreatDB then UpdateSettingsTabsVisibility(); SettingsFrame.RefreshUI() end end)
+SettingsFrame:SetScript("OnShow", function() 
+    if SausageThreatDB then 
+        SettingsFrame:Raise()
+        UpdateSettingsTabsVisibility()
+        SettingsFrame.RefreshUI() 
+    end 
+end)
 
 -- [[ TEST WINDOW ]]
 local TestFrame = CreateFrame("Frame", "SausageThreatTestFrame", UIParent)
-TestFrame:SetSize(250, 450); TestFrame:SetPoint("CENTER", 300, 0); TestFrame:SetBackdrop(SettingsFrame:GetBackdrop()); TestFrame:SetBackdropColor(0.05, 0.05, 0.05, 0.95); TestFrame:SetMovable(true); TestFrame:EnableMouse(true); TestFrame:RegisterForDrag("LeftButton"); TestFrame:SetScript("OnDragStart", TestFrame.StartMoving); TestFrame:SetScript("OnDragStop", TestFrame.StopMovingOrSizing); TestFrame:Hide()
+TestFrame:SetSize(250, 450); TestFrame:SetPoint("CENTER", 300, 0); TestFrame:SetBackdrop(SettingsFrame:GetBackdrop()); TestFrame:SetBackdropColor(1, 1, 1, 1); TestFrame:SetMovable(true); TestFrame:EnableMouse(true); TestFrame:RegisterForDrag("LeftButton"); TestFrame:SetScript("OnDragStart", TestFrame.StartMoving); TestFrame:SetScript("OnDragStop", TestFrame.StopMovingOrSizing); TestFrame:Hide()
 local testHeader = TestFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal"); testHeader:SetPoint("TOP", 0, -15); testHeader:SetText("SausageThreat Debug")
 
 local function CreateTestButton(text, y, func)
@@ -1443,29 +1466,76 @@ CreateTestButton("Test THREAT Sound", -345, function() if THREAT_SOUND then Play
 CreateTestButton("Close Test Window", -390, function() TestFrame:Hide() end)
 
 -- [[ MINIMAP IKONA ]]
--- local minimapIcon removed for SDS
--- minimapIcon:SetSize(32, 32); minimapIcon:SetPoint("TOPLEFT", Minimap, "TOPLEFT", 0, 0)
--- local iconTex = minimapIcon:CreateTexture(nil, "BACKGROUND"); iconTex:SetTexture("Interface\\Icons\\Inv_Misc_Food_54"); iconTex:SetSize(20, 20); iconTex:SetPoint("CENTER")
--- local iconBorder = minimapIcon:CreateTexture(nil, "OVERLAY"); iconBorder:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder"); iconBorder:SetSize(54, 54); iconBorder:SetPoint("TOPLEFT", 0, 0)
--- minimapIcon:RegisterForClicks("LeftButtonUp", "RightButtonUp"); minimapIcon:RegisterForDrag("RightButton")
--- local isDragging = false
--- minimapIcon:SetScript("OnDragStart", function(self)
---    self:LockHighlight(); isDragging = true
---    self:SetScript("OnUpdate", function(self)
---        local xpos, ypos = GetCursorPosition(); local xmin, ymin = Minimap:GetLeft(), Minimap:GetBottom()
---        xpos = xmin - xpos/UIParent:GetScale() + 70; ypos = ypos/UIParent:GetScale() - ymin - 70
---        local angle = math.deg(math.atan2(ypos, xpos))
---        local x, y = math.cos(math.rad(angle)) * 80, math.sin(math.rad(angle)) * 80
---        self:SetPoint("TOPLEFT", Minimap, "TOPLEFT", 52 - x, y - 52)
---    end)
--- end)
--- minimapIcon:SetScript("OnDragStop", ... )
--- minimapIcon:SetScript("OnClick", ... )
+local function CreateMinimapButton()
+    local mmBtn = CreateFrame("Button", "SausageThreatMinimapBtn", Minimap)
+    mmBtn:SetSize(31, 31)
+    mmBtn:SetFrameStrata("MEDIUM")
+    mmBtn:SetFrameLevel(Minimap:GetFrameLevel() + 10)
+    mmBtn:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+    mmBtn:RegisterForDrag("RightButton")
+
+    local icon = mmBtn:CreateTexture(nil, "BACKGROUND")
+    icon:SetTexture("Interface\\Icons\\Inv_Misc_Food_54") -- The Red Chili/Sausage
+    icon:SetSize(20, 20)
+    icon:SetPoint("CENTER")
+
+    local border = mmBtn:CreateTexture(nil, "OVERLAY")
+    border:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder")
+    border:SetSize(52, 52)
+    border:SetPoint("TOPLEFT")
+    border:SetVertexColor(1, 0.6, 0) -- Sausage Orange
+
+    local function UpdatePosition()
+        local angle = math_rad(SausageThreatDB and SausageThreatDB.minimapPos or 180)
+        local x, y = math_cos(angle) * 80, math_sin(angle) * 80
+        mmBtn:SetPoint("CENTER", Minimap, "CENTER", x, y)
+    end
+
+    mmBtn:SetScript("OnClick", function(self, button)
+        if button == "LeftButton" then
+            if IsShiftKeyDown() then
+                if SettingsFrame:IsShown() then SettingsFrame:Hide() else SettingsFrame:Show() end
+            else
+                if MainFrame:IsShown() then MainFrame:Hide() else MainFrame:Show() end
+            end
+        end
+    end)
+
+    mmBtn:SetScript("OnDragStart", function(self)
+        self:SetScript("OnUpdate", function()
+            local xpos, ypos = GetCursorPosition()
+            local xmin, ymin = Minimap:GetLeft(), Minimap:GetBottom()
+            local scale = Minimap:GetEffectiveScale()
+            xpos, ypos = (xpos / scale) - xmin - 70, (ypos / scale) - ymin - 70
+            local angle = math_deg(math_atan2(ypos, xpos))
+            if angle < 0 then angle = angle + 360 end
+            if SausageThreatDB then SausageThreatDB.minimapPos = angle end
+            UpdatePosition()
+        end)
+    end)
+    mmBtn:SetScript("OnDragStop", function(self) self:SetScript("OnUpdate", nil) end)
+
+    mmBtn:SetScript("OnEnter", function(self)
+        _G.GameTooltip:SetOwner(self, "ANCHOR_LEFT")
+        _G.GameTooltip:AddLine("|cffff8800Sausage|r Threat", 1, 1, 1)
+        _G.GameTooltip:AddLine("Left Click: Toggle Grid", 1, 0.8, 0)
+        _G.GameTooltip:AddLine("Shift-Click: Settings", 1, 0.8, 0)
+        _G.GameTooltip:Show()
+    end)
+    mmBtn:SetScript("OnLeave", function() _G.GameTooltip:Hide() end)
+
+    UpdatePosition()
+end
+
+-- Initialize minimap button after a short delay (Bible p. 1327)
+After(1, CreateMinimapButton)
 
 -- [[ EVENTY ]]
 EventFrame:RegisterEvent("ADDON_LOADED")
 EventFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
-EventFrame:RegisterEvent("GROUP_ROSTER_UPDATE")
+EventFrame:RegisterEvent("GROUP_ROSTER_UPDATE")       -- Cataclysm+ (záloha)
+EventFrame:RegisterEvent("RAID_ROSTER_UPDATE")        -- WotLK 3.3.5a
+EventFrame:RegisterEvent("PARTY_MEMBERS_CHANGED")     -- WotLK 3.3.5a
 EventFrame:RegisterEvent("PLAYER_REGEN_DISABLED")
 EventFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
 EventFrame:RegisterEvent("CHAT_MSG_ADDON")
@@ -1499,7 +1569,6 @@ EventFrame:SetScript("OnEvent", function(self, event, ...)
             end
 
             MainFrame:ClearAllPoints(); CreateGridButtons()
-            CreateMinimapButton()
             if SausageThreatDB.isShown == false or SausageThreatDB.autoHide then MainFrame:Hide() else MainFrame:Show() end
             SausageThreatMainFrame_UpdateGrid()
             
@@ -1518,7 +1587,7 @@ EventFrame:SetScript("OnEvent", function(self, event, ...)
                 end
             end)
         end
-    elseif event == "PLAYER_ENTERING_WORLD" or event == "GROUP_ROSTER_UPDATE" or event == "PLAYER_TALENT_UPDATE" then
+    elseif event == "PLAYER_ENTERING_WORLD" or event == "GROUP_ROSTER_UPDATE" or event == "RAID_ROSTER_UPDATE" or event == "PARTY_MEMBERS_CHANGED" or event == "PLAYER_TALENT_UPDATE" then
         if event == "PLAYER_ENTERING_WORLD" or event == "PLAYER_TALENT_UPDATE" then
             local myRole = DetermineMyRole()
             SausageThreatDB.assignedRoles = SausageThreatDB.assignedRoles or {}
@@ -1602,9 +1671,9 @@ EventFrame:SetScript("OnEvent", function(self, event, ...)
                     lockedSpells[targetName][targetClass] = GetTime() + SausageThreatDB.cmdLockout
                 end
                 
-                if assignedName == UnitName("player") then
+                if assignedName == UnitName("player") or isTestMode then
                     local targetUnit = GetUnitByName(targetName)
-                    if targetUnit and mySpellName and IsSpellInRange(mySpellName, targetUnit) == 0 then
+                    if not isTestMode and targetUnit and mySpellName and IsSpellInRange(mySpellName, targetUnit) == 0 then
                         print("|cFFFF0000[SausageThreat]|r Rejected PING (Out of range): " .. targetName); SendComm("RANGE_FAIL:"..targetName..":"..(targetClass or "PALA"))
                         return
                     end
